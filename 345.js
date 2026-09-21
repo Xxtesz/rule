@@ -1,1424 +1,1628 @@
-# ══════════════════════════════════════════════════════════════════════════════
-#  Shadowrocket Smart v5.4.30-SR.1 — 小火箭版（从 Clash Party v5.4.30 迁移重构）
-#  Build: 2026-06-17 | Target: Shadowrocket iOS (App Store 正版) | macOS 通用
-#  架构：22 区域 url-test 组（11 全部 + 11 家宽）+ 33 业务策略组（含 14 流媒体平台组）+ ~286 RULE-SET
-#  基线：Clash Party v5.4.30（唯一主线）
-#  v5.4.30: FEAT#166-GOOGLE 新增 🔍 Google 服务，从 🔧 工具与服务 拆分 Google 基础服务
-#  变更历史：见 `Shadowrocket/CHANGELOG.md`
-# ══════════════════════════════════════════════════════════════════════════════
-
-[General]
-# 旁路系统（推送通知正常）
-bypass-system = true
-
-# 跳过代理（私有网段 + iOS 敏感域名，避免 TUN 劫持导致支付/银行/运营商 APP 故障）
-skip-proxy = 192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,127.0.0.0/8,100.64.0.0/10,169.254.0.0/16,224.0.0.0/4,240.0.0.0/4,localhost,*.local,captive.apple.com,*.ccb.com,*.abchina.com.cn,*.psbc.com,*.icbc.com.cn,*.bankcomm.com,*.alipay.com,*.wxpay.com,*.tenpay.com
-
-# TUN 旁路路由（保留组播/私有网段）
-tun-excluded-routes = 10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.0.0.0/24,192.0.2.0/24,192.88.99.0/24,192.168.0.0/16,198.18.0.0/15,198.51.100.0/24,203.0.113.0/24,224.0.0.0/4,240.0.0.0/4,255.255.255.255/32,239.255.255.250/32
-
-# ─── DNS（对齐 Clash Party v5.4.21：DoH-over-IP bootstrap） ──────────────────
-# v5.4.21 #4 借鉴 Proxy-override：所有 DoH URL 改为 IP-host，消除 bootstrap 泄漏。
-# SR 默认无独立 bootstrap 字段；直接使用 IP DoH 即可免 bootstrap 自举。
-# 并发查询策略：多个 DNS 同时发起，采用最先返回的结果
-dns-server = https://223.5.5.5/dns-query,https://223.6.6.6/dns-query,https://8.8.8.8/dns-query,https://1.1.1.1/dns-query
-
-# ─── 代理域名 DNS（对应 Clash proxy-server-nameserver；隐藏参数） ─────────────
-# 用于解析节点本身的域名（如 node.xxx.com），以及经代理连接时的 DNS 查询
-# 国外 DoH 前置，国内 DoH 兜底，防止节点域名解析回落到系统 DNS
-proxy-dns-server = https://8.8.8.8/dns-query,https://1.1.1.1/dns-query,https://223.5.5.5/dns-query,https://223.6.6.6/dns-query
-
-# ─── 备用 DNS（对应 Clash fallback；主 DNS 超时 2s 后回退） ───────────────────
-# 国外 DoH 做 fallback，确保 DNS 污染或超时情况下仍能解析
-fallback-dns-server = https://8.8.8.8/dns-query,https://1.1.1.1/dns-query
-
-# ─── Clash DNS 不兼容项说明（无法迁移，已省略） ───────────────────────────────
-# default-nameserver  → SR 无独立 bootstrap 字段；DoH 域名自举由客户端实现
-# respect-rules: true → SR 引擎默认尊重规则，无需此开关
-# fallback-filter.geoip: true / geoip-code: CN → SR 无 DNS 层 GeoIP 过滤机制
-#   替代方案：若担心 fallback 返回被污染的 CN IP，可将 fallback 改为国内 DoH
-#   但这会失去"主 DNS 污染时用国外 DoH 解毒"的价值，本配置优先保留解毒能力
-
-# IPv6 支持（量化交易场景建议开启，部分交易所 WS 走 IPv6）
-ipv6 = true
-prefer-ipv6 = false
-
-# 私有 IP 应答（防止 ISP 劫持返回私有 IP 误判为被劫持）
-private-ip-answer = true
-
-# 直连域名解析失败后使用代理（容错）
-dns-direct-fallback-proxy = true
-
-# DNS 劫持（Netflix 硬编码 Google DNS → 劫持到 SR DNS）
-hijack-dns = 8.8.8.8:53,8.8.4.4:53
-
-# UDP 回退策略（遇到不支持 UDP 的节点 → 拒绝，避免 UDP 泄漏）
-udp-policy-not-supported-behaviour = REJECT
-
-# QUIC 屏蔽（HTTP/3 在跨境链路表现很差，强制回退到 HTTP/2/1.1；量化交易 WS 不受影响）
-# v5.4.22 N/A#1：SR block-quic 是引擎级开关，不支持 AND/NOT 白名单豁免
-block-quic = all-proxy
-
-# ping 自动回复（局域网探测兼容）
-icmp-auto-reply = true
-
-# 允许 DNS SVCB 查询（部分 CDN 域名需要，默认关闭；如遇问题可改为 true）
-# allow-dns-svcb = false
-
-# 网络兼容模式（0=自动；3=TUN Only，提高国内 APP 兼容性）
-# compatibility-mode = 3
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  GeoLite2 数据库（MMDB）配置说明
-#  ────────────────────────────────────────────────────────────────────────────
-#  ⚠️ Shadowrocket 的 MMDB 数据库 URL **无法通过配置文件设置**，必须在 UI 操作：
-#
-#     设置 → GeoLite2 数据库 → 填入下方 URL → 下载
-#
-#  推荐（Loyalsoldier 加强版，含 cloudflare/telegram/netflix/google 标签）：
-#     https://fastly.jsdelivr.net/gh/Loyalsoldier/geoip@release/Country.mmdb
-#
-#  替换后即可启用原版的精准标签路由（目前本配置已注释相关规则以避免空匹配；
-#  用户在 SR 中完成 MMDB 替换后，可手动取消阶段 31 附近的 GEOIP 标签注释）。
-#
-#  ❌ 以下文件 Shadowrocket **不支持**（仅 Clash/Mihomo 用）：
-#     • GeoIP.dat      — V2Ray 格式，SR 只读 MMDB
-#     • GeoSite.dat    — SR 无 GEOSITE 规则类型（本配置用 RULE-SET 替代）
-#     • GeoLite2-ASN.mmdb — SR 的 IP-ASN 规则用内置 MMDB，无独立加载入口
-# ══════════════════════════════════════════════════════════════════════════════
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  [Proxy]
-#  本段用于在配置文件内嵌本地节点。强烈建议通过 订阅/扫码/剪贴板 添加节点，
-#  而不是写在这里。此处仅保留为兼容位，需要手动添加的用户可参考下方格式。
-# ══════════════════════════════════════════════════════════════════════════════
-
-[Proxy]
-# Shadowsocks:  节点名=ss,地址,端口,password=密码,method=aes-256-gcm
-# VMess:        节点名=vmess,地址,端口,password=UUID,obfs=websocket,path=/xxx
-# VLESS:        节点名=vless,地址,端口,password=UUID,tls=true,peer=xxx.com,flow=xtls-rprx-vision
-# Trojan:       节点名=trojan,地址,端口,password=密码,peer=xxx.com
-# Hysteria2:    节点名=hysteria2,地址,端口,auth=密码,peer=xxx.com,alpn=h3
-# 本地节点留空 → 完全使用订阅节点（推荐）
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  [Proxy Group] — 22 Smart 区域组（11 全部 + 11 家宽）+ 33 业务策略组
-#  ────────────────────────────────────────────────────────────────────────────
-#  Smart 区域组（url-test + 正则过滤）
-#    • 原版 Clash Smart 使用 lightgbm 机器学习，SR 无此能力 → 用 url-test 退化
-#    • policy-regex-filter 在导入时一次性扫描所有节点名，按地区自动聚合
-#    • interval=600s（10 分钟重测），tolerance=50ms（防抖动）
-#    • url-test 默认自动选择延迟最低的节点
-#
-#  业务策略组（select 手动）
-#    • 默认选择 Smart 区域组（非具体节点），实现「组 → 组」级联自动切换
-#    • 用户可在 SR UI 中按需覆盖默认选择
-# ══════════════════════════════════════════════════════════════════════════════
-
-[Proxy Group]
-
-# 全球节点：所有节点聚合，排除信息节点/回国节点；倍率节点不再剔除
-🌍 全球节点 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=^((?!(导航|剩余|套餐|到期|重置|官网|订阅|回国|回程|国内专线)).)*$
-
-🎵 音乐流媒体 = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# 其他国外流媒体（Paramount+/Peacock/Twitch/Crunchyroll 等）
-🌐 其他国外流媒体 = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# 香港流媒体（myTV SUPER/now TV 等）
-🇭🇰 香港流媒体 = select,🇭🇰 香港节点,🏡 香港家宽,🌍 全球节点,🏡 全球家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# 台湾流媒体（巴哈姆特/LiTV 等）
-🇹🇼 台湾流媒体 = select,🇹🇼 台湾节点,🏡 台湾家宽,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# 日韩流媒体（Abema/DAZN/niconico 等）
-🇯🇵 日韩流媒体 = select,🇯🇵 日韩节点,🏡 日韩家宽,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# 欧洲流媒体（BBC/ITV/ZDF 等）
-🇪🇺 欧洲流媒体 = select,🇪🇺 欧洲节点,🏡 欧洲家宽,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# 国内游戏
-🕹️ 国内游戏 = select,DIRECT,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽
-
-# 国外游戏（Steam/Epic/PS/Xbox 等）
-🎮 国外游戏 = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,DIRECT
-
-# 工具与服务（搜索引擎/开发者服务/云与CDN 等）
-# Google 服务（从工具组拆出的独立平台服务）
-🔍 Google 服务 = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-🔧 工具与服务 = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# 微软服务
-Ⓜ️ 微软服务 = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# 苹果服务（默认直连，受限时切代理）
-🍎 苹果服务 = select,DIRECT,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽
-
-# 下载更新（系统/软件包/镜像源）
-📥 下载更新 = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# BT/PT Tracker
-🛰️ BT/PT Tracker = select,REJECT,DIRECT,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽
-
-# 国内网站（默认直连）
-🏠 国内网站 = select,DIRECT,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽
-
-# 受限网站（GFW 封锁域名；中国选代理，印尼选直连）
-🚫 受限网站 = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# 国外网站（通用国外域名）
-🌐 国外网站 = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# 漏网之鱼（FINAL）
-🐟 漏网之鱼 = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# 广告拦截（默认 REJECT）
-🛑 广告拦截 = select,REJECT,DIRECT
-
-# ─── 22 Smart 区域组（11 全部 + 11 家宽） ────────────────────────────────────
-🏡 全球家宽 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=^((?!(导航|剩余|套餐|到期|重置|官网|订阅|回国|回程|国内专线)).)*([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带).*$
-
-# 香港节点 / 家宽
-🇭🇰 香港节点 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=🇭🇰|HK|Hong|hong|HongKong|hongkong|HKG|香港|广港|深港|沪港|京港|中港|Hong Kong
-🏡 香港家宽 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=(🇭🇰|HK|Hong|hong|HongKong|hongkong|HKG|香港|广港|深港|沪港|京港|中港|Hong Kong).*([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带)|([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带).*(🇭🇰|HK|Hong|hong|HongKong|hongkong|HKG|香港|广港|深港|沪港|京港|中港|Hong Kong)
-
-# 台湾节点 / 家宽
-🇹🇼 台湾节点 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=🇹🇼|TW|Taiwan|taiwan|TWN|Taipei|taipei|TPE|台湾|台灣|台北|台中|高雄|新北|桃园
-🏡 台湾家宽 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=(🇹🇼|TW|Taiwan|taiwan|TWN|Taipei|taipei|TPE|台湾|台灣|台北|台中|高雄|新北|桃园).*([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带)|([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带).*(🇹🇼|TW|Taiwan|taiwan|TWN|Taipei|taipei|TPE|台湾|台灣|台北|台中|高雄|新北|桃园)
-
-# 日韩节点（JP + KR 合并）/ 家宽
-🇯🇵 日韩节点 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=🇯🇵|🇰🇷|JP|Japan|japan|JPN|Tokyo|tokyo|Osaka|osaka|NRT|HND|KIX|日本|东京|大阪|横滨|名古屋|(?<![a-zA-Z])KR(?![a-zA-Z])|Korea|korea|KOR|Seoul|seoul|ICN|韩国|首尔|釜山|仁川
-🏡 日韩家宽 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=(🇯🇵|🇰🇷|JP|Japan|japan|JPN|Tokyo|tokyo|Osaka|osaka|NRT|HND|KIX|日本|东京|大阪|横滨|名古屋|(?<![a-zA-Z])KR(?![a-zA-Z])|Korea|korea|KOR|Seoul|seoul|ICN|韩国|首尔|釜山|仁川).*([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带)|([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带).*(🇯🇵|🇰🇷|JP|Japan|japan|JPN|Tokyo|tokyo|Osaka|osaka|NRT|HND|KIX|日本|东京|大阪|横滨|名古屋|(?<![a-zA-Z])KR(?![a-zA-Z])|Korea|korea|KOR|Seoul|seoul|ICN|韩国|首尔|釜山|仁川)
-
-# 狮城节点 / 家宽
-🇸🇬 狮城节点 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=🇸🇬|(?<![a-zA-Z])SG(?![a-zA-Z])|Singapore|singapore|SGP|SIN|狮城|新加坡|Changi
-🏡 狮城家宽 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=(🇸🇬|(?<![a-zA-Z])SG(?![a-zA-Z])|Singapore|singapore|SGP|SIN|狮城|新加坡|Changi).*([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带)|([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带).*(🇸🇬|(?<![a-zA-Z])SG(?![a-zA-Z])|Singapore|singapore|SGP|SIN|狮城|新加坡|Changi)
-
-# 亚太节点（HK + TW + CN + JP + KR + 东南亚）/ 家宽 — v5.4.26 FIX#CN-APAC
-🌏 亚太节点 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=🇭🇰|🇹🇼|🇨🇳|🇯🇵|🇰🇷|🇸🇬|🇲🇾|🇹🇭|🇻🇳|🇵🇭|🇮🇩|🇮🇳|HK|TW|(?<![a-zA-Z])CN(?![a-zA-Z])|CHN|JP|(?<![a-zA-Z])KR(?![a-zA-Z])|(?<![a-zA-Z])SG(?![a-zA-Z])|SGP|SIN|MY|TH|VN|PH|ID|IN|Hong|Taiwan|China|Japan|Korea|Singapore|singapore|Malaysia|Thailand|Vietnam|Philippines|Indonesia|India|香港|台湾|中国|大陆|国内|回国|mainland|日本|韩国|新加坡|狮城|马来|泰国|越南|菲律宾|印尼|印度|亚太|iplc|IEPL|专线|cn2|GIA|Changi
-🏡 亚太家宽 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=(🇭🇰|🇹🇼|🇨🇳|🇯🇵|🇰🇷|🇸🇬|🇲🇾|🇹🇭|🇻🇳|🇵🇭|🇮🇩|🇮🇳|HK|TW|(?<![a-zA-Z])CN(?![a-zA-Z])|CHN|JP|(?<![a-zA-Z])KR(?![a-zA-Z])|(?<![a-zA-Z])SG(?![a-zA-Z])|SGP|SIN|MY|TH|VN|PH|ID|IN|Hong|Taiwan|China|Japan|Korea|Singapore|singapore|Malaysia|Thailand|Vietnam|Philippines|Indonesia|India|香港|台湾|中国|大陆|国内|回国|mainland|日本|韩国|新加坡|狮城|马来|泰国|越南|菲律宾|印尼|印度|亚太|iplc|IEPL|专线|cn2|GIA|Changi).*([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带)|([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带).*(🇭🇰|🇹🇼|🇨🇳|🇯🇵|🇰🇷|🇸🇬|🇲🇾|🇹🇭|🇻🇳|🇵🇭|🇮🇩|🇮🇳|HK|TW|(?<![a-zA-Z])CN(?![a-zA-Z])|CHN|JP|(?<![a-zA-Z])KR(?![a-zA-Z])|(?<![a-zA-Z])SG(?![a-zA-Z])|SGP|SIN|MY|TH|VN|PH|ID|IN|Hong|Taiwan|China|Japan|Korea|Singapore|singapore|Malaysia|Thailand|Vietnam|Philippines|Indonesia|India|香港|台湾|中国|大陆|国内|回国|mainland|日本|韩国|新加坡|狮城|马来|泰国|越南|菲律宾|印尼|印度|亚太|iplc|IEPL|专线|cn2|GIA|Changi)
-
-# 美国节点 / 家宽
-🇺🇸 美国节点 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=🇺🇸|(?<![a-zA-Z])US(?![a-zA-Z])|USA|America|america|United States|LAX|SJC|SFO|SEA|JFK|ORD|DFW|IAD|ATL|MIA|美国|洛杉矶|圣何塞|旧金山|西雅图|纽约|芝加哥|达拉斯|凤凰城|亚特兰大|迈阿密|波士顿|华盛顿|休斯顿|硅谷|弗吉尼亚|奥斯汀|拉斯维加斯
-🏡 美国家宽 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=(🇺🇸|(?<![a-zA-Z])US(?![a-zA-Z])|USA|America|america|United States|LAX|SJC|SFO|SEA|JFK|ORD|DFW|IAD|ATL|MIA|美国|洛杉矶|圣何塞|旧金山|西雅图|纽约|芝加哥|达拉斯|凤凰城|亚特兰大|迈阿密|波士顿|华盛顿|休斯顿|硅谷|弗吉尼亚|奥斯汀|拉斯维加斯).*([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带)|([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带).*(🇺🇸|(?<![a-zA-Z])US(?![a-zA-Z])|USA|America|america|United States|LAX|SJC|SFO|SEA|JFK|ORD|DFW|IAD|ATL|MIA|美国|洛杉矶|圣何塞|旧金山|西雅图|纽约|芝加哥|达拉斯|凤凰城|亚特兰大|迈阿密|波士顿|华盛顿|休斯顿|硅谷|弗吉尼亚|奥斯汀|拉斯维加斯)
-
-# 欧洲节点 / 家宽
-🇪🇺 欧洲节点 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=🇬🇧|🇫🇷|🇩🇪|🇳🇱|🇨🇭|🇮🇹|🇪🇸|🇷🇺|EU|UK|GB|FR|DE|NL|CH|IT|ES|PT|(?<![a-zA-Z])SE(?![a-zA-Z])|FI|NO|DK|(?<![a-zA-Z])PL(?![a-zA-Z])|IE|RU|AT|BE|Europe|europe|London|Paris|Berlin|Frankfurt|Amsterdam|Moscow|Zurich|Vienna|Stockholm|Madrid|Rome|Helsinki|Warsaw|Prague|LHR|CDG|FRA|AMS|SVO|ZRH|VIE|MAD|FCO|欧洲|英国|法国|德国|荷兰|瑞士|意大利|西班牙|俄罗斯|奥地利|瑞典|芬兰|挪威|丹麦|波兰|爱尔兰|伦敦|巴黎|柏林|法兰克福|阿姆斯特丹|莫斯科|苏黎世|维也纳|斯德哥尔摩|马德里|罗马|(?<![a-zA-Z])GR(?![a-zA-Z])|🇬🇷|Greece|Athens|希腊|雅典|(?<![a-zA-Z])RO(?![a-zA-Z])|🇷🇴|Romania|Bucharest|罗马尼亚|布加勒斯特|(?<![a-zA-Z])HU(?![a-zA-Z])|🇭🇺|Hungary|Budapest|匈牙利|布达佩斯|(?<![a-zA-Z])CZ(?![a-zA-Z])|🇨🇿|Czech|Portugal|Lisbon|🇵🇹|葡萄牙|里斯本|Belgium|Brussels|🇧🇪|比利时|布鲁塞尔|Ireland|Dublin|🇮🇪|爱尔兰|都柏林|Denmark|Copenhagen|🇩🇰|丹麦|哥本哈根|Norway|Oslo|🇳🇴|挪威|奥斯陆
-🏡 欧洲家宽 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=(🇬🇧|🇫🇷|🇩🇪|🇳🇱|🇨🇭|🇮🇹|🇪🇸|🇷🇺|EU|UK|GB|FR|DE|NL|CH|IT|ES|PT|(?<![a-zA-Z])SE(?![a-zA-Z])|FI|NO|DK|(?<![a-zA-Z])PL(?![a-zA-Z])|IE|RU|AT|BE|Europe|europe|London|Paris|Berlin|Frankfurt|Amsterdam|Moscow|Zurich|Vienna|Stockholm|Madrid|Rome|Helsinki|Warsaw|Prague|LHR|CDG|FRA|AMS|SVO|ZRH|VIE|MAD|FCO|欧洲|英国|法国|德国|荷兰|瑞士|意大利|西班牙|俄罗斯|奥地利|瑞典|芬兰|挪威|丹麦|波兰|爱尔兰|伦敦|巴黎|柏林|法兰克福|阿姆斯特丹|莫斯科|苏黎世|维也纳|斯德哥尔摩|马德里|罗马|(?<![a-zA-Z])GR(?![a-zA-Z])|🇬🇷|Greece|Athens|希腊|雅典|(?<![a-zA-Z])RO(?![a-zA-Z])|🇷🇴|Romania|Bucharest|罗马尼亚|布加勒斯特|(?<![a-zA-Z])HU(?![a-zA-Z])|🇭🇺|Hungary|Budapest|匈牙利|布达佩斯|(?<![a-zA-Z])CZ(?![a-zA-Z])|🇨🇿|Czech|Portugal|Lisbon|🇵🇹|葡萄牙|里斯本|Belgium|Brussels|🇧🇪|比利时|布鲁塞尔|Ireland|Dublin|🇮🇪|爱尔兰|都柏林|Denmark|Copenhagen|🇩🇰|丹麦|哥本哈根|Norway|Oslo|🇳🇴|挪威|奥斯陆).*([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带)|([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带).*(🇬🇧|🇫🇷|🇩🇪|🇳🇱|🇨🇭|🇮🇹|🇪🇸|🇷🇺|EU|UK|GB|FR|DE|NL|CH|IT|ES|PT|(?<![a-zA-Z])SE(?![a-zA-Z])|FI|NO|DK|(?<![a-zA-Z])PL(?![a-zA-Z])|IE|RU|AT|BE|Europe|europe|London|Paris|Berlin|Frankfurt|Amsterdam|Moscow|Zurich|Vienna|Stockholm|Madrid|Rome|Helsinki|Warsaw|Prague|LHR|CDG|FRA|AMS|SVO|ZRH|VIE|MAD|FCO|欧洲|英国|法国|德国|荷兰|瑞士|意大利|西班牙|俄罗斯|奥地利|瑞典|芬兰|挪威|丹麦|波兰|爱尔兰|伦敦|巴黎|柏林|法兰克福|阿姆斯特丹|莫斯科|苏黎世|维也纳|斯德哥尔摩|马德里|罗马|(?<![a-zA-Z])GR(?![a-zA-Z])|🇬🇷|Greece|Athens|希腊|雅典|(?<![a-zA-Z])RO(?![a-zA-Z])|🇷🇴|Romania|Bucharest|罗马尼亚|布加勒斯特|(?<![a-zA-Z])HU(?![a-zA-Z])|🇭🇺|Hungary|Budapest|匈牙利|布达佩斯|(?<![a-zA-Z])CZ(?![a-zA-Z])|🇨🇿|Czech|Portugal|Lisbon|🇵🇹|葡萄牙|里斯本|Belgium|Brussels|🇧🇪|比利时|布鲁塞尔|Ireland|Dublin|🇮🇪|爱尔兰|都柏林|Denmark|Copenhagen|🇩🇰|丹麦|哥本哈根|Norway|Oslo|🇳🇴|挪威|奥斯陆)
-
-# 美洲节点（US + CA + MX + BR + AR + CL 等）/ 家宽
-🌎 美洲节点 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=🇺🇸|🇨🇦|🇲🇽|🇧🇷|🇦🇷|🇨🇱|🇵🇪|🇨🇴|(?<![a-zA-Z])US(?![a-zA-Z])|USA|CA|MX|BR|AR|CL|PE|CO|Americas|America|Canada|Mexico|Brazil|Argentina|Chile|Peru|Colombia|Toronto|Vancouver|Montreal|YYZ|YVR|GRU|GIG|EZE|美洲|加拿大|墨西哥|巴西|阿根廷|智利|秘鲁|哥伦比亚|多伦多|温哥华|蒙特利尔|圣保罗
-🏡 美洲家宽 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=(🇺🇸|🇨🇦|🇲🇽|🇧🇷|🇦🇷|🇨🇱|🇵🇪|🇨🇴|(?<![a-zA-Z])US(?![a-zA-Z])|USA|CA|MX|BR|AR|CL|PE|CO|Americas|America|Canada|Mexico|Brazil|Argentina|Chile|Peru|Colombia|Toronto|Vancouver|Montreal|YYZ|YVR|GRU|GIG|EZE|美洲|加拿大|墨西哥|巴西|阿根廷|智利|秘鲁|哥伦比亚|多伦多|温哥华|蒙特利尔|圣保罗).*([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带)|([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带).*(🇺🇸|🇨🇦|🇲🇽|🇧🇷|🇦🇷|🇨🇱|🇵🇪|🇨🇴|(?<![a-zA-Z])US(?![a-zA-Z])|USA|CA|MX|BR|AR|CL|PE|CO|Americas|America|Canada|Mexico|Brazil|Argentina|Chile|Peru|Colombia|Toronto|Vancouver|Montreal|YYZ|YVR|GRU|GIG|EZE|美洲|加拿大|墨西哥|巴西|阿根廷|智利|秘鲁|哥伦比亚|多伦多|温哥华|蒙特利尔|圣保罗)
-
-# 其他节点 / 家宽（否定式兜底）
-🌏 其他节点 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10
-🏡 其他家宽 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10
-
-# 非洲节点 / 家宽
-🌍 非洲节点 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=🇿🇦|🇪🇬|🇳🇬|🇰🇪|ZA|EG|NG|KE|MA|TN|DZ|Africa|africa|South Africa|Egypt|Nigeria|Kenya|Morocco|Johannesburg|Cairo|Lagos|Nairobi|JNB|CAI|NBO|非洲|南非|埃及|尼日利亚|肯尼亚|摩洛哥|约翰内斯堡|开罗|拉各斯|内罗毕
-🏡 非洲家宽 = url-test,url=http://www.gstatic.com/generate_204,interval=300,timeout=5,tolerance=10,policy-regex-filter=(🇿🇦|🇪🇬|🇳🇬|🇰🇪|ZA|EG|NG|KE|MA|TN|DZ|Africa|africa|South Africa|Egypt|Nigeria|Kenya|Morocco|Johannesburg|Cairo|Lagos|Nairobi|JNB|CAI|NBO|非洲|南非|埃及|尼日利亚|肯尼亚|摩洛哥|约翰内斯堡|开罗|拉各斯|内罗毕).*([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带)|([Ii][Pp][Ll][Cc]|[Ii][Ee][Pp][Ll]|专线|[Rr]esi(dential)?|[Hh]ome[-_ ]?[Ii][Pp]|[Hh]ome[-_ ]?[Bb]roadband|[Hh]ome|[Bb]roadband|[Ii][Ss][Pp]|家宽|家庭宽带|家庭住宅|住宅宽带|住宅|宽带).*(🇿🇦|🇪🇬|🇳🇬|🇰🇪|ZA|EG|NG|KE|MA|TN|DZ|Africa|africa|South Africa|Egypt|Nigeria|Kenya|Morocco|Johannesburg|Cairo|Lagos|Nairobi|JNB|CAI|NBO|非洲|南非|埃及|尼日利亚|肯尼亚|摩洛哥|约翰内斯堡|开罗|拉各斯|内罗毕)
-
-# ─── 33 业务策略组（默认链式指向区域组，用户可手动覆盖） ────────────────────
-# AI 服务：默认家宽优先；量化模型训练/推理优先走更稳定的住宅出口
-🤖 AI 服务 = select,🏡 全球家宽,🏡 香港家宽,🏡 台湾家宽,🏡 日韩家宽,🏡 狮城家宽,🏡 亚太家宽,🏡 美国家宽,🏡 欧洲家宽,🏡 美洲家宽,🏡 非洲家宽,🌍 全球节点,🇭🇰 香港节点,🇹🇼 台湾节点,🇯🇵 日韩节点,🇸🇬 狮城节点,🌏 亚太节点,🇺🇸 美国节点,🇪🇺 欧洲节点,🌎 美洲节点,🌍 非洲节点,🌏 其他节点,DIRECT
-
-# 加密货币：量化交易核心，建议常驻低延迟 SG/HK/JP
-💰 加密货币 = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# 金融支付
-🏦 金融支付 = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# 即时通讯（Telegram/Discord/WhatsApp 等）
-💬 即时通讯 = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# 社交媒体（Twitter/FB/IG 等）
-📱 社交媒体 = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# 会议协作（Zoom/Teams/Slack/Notion 等）
-🧑‍💼 会议协作 = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# 国内流媒体（B 站/优酷/爱奇艺等）
-📺 国内流媒体 = select,DIRECT,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽
-
-# TikTok（字节跳动海外版）
-🎵 TikTok = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# Netflix
-🎥 Netflix = select,🇺🇸 美国节点,🏡 美国家宽,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# Disney+
-🎬 Disney+ = select,🇺🇸 美国节点,🏡 美国家宽,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# HBO/Max
-📡 HBO/Max = select,🇺🇸 美国节点,🏡 美国家宽,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# Hulu（含 Hulu JP）
-📺 Hulu = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# Prime Video
-🎬 Prime Video = select,🇺🇸 美国节点,🏡 美国家宽,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-
-# YouTube
-📹 YouTube = select,🌍 全球节点,🏡 全球家宽,🇭🇰 香港节点,🏡 香港家宽,🇹🇼 台湾节点,🏡 台湾家宽,🇯🇵 日韩节点,🏡 日韩家宽,🇸🇬 狮城节点,🏡 狮城家宽,🌏 亚太节点,🏡 亚太家宽,🇺🇸 美国节点,🏡 美国家宽,🇪🇺 欧洲节点,🏡 欧洲家宽,🌎 美洲节点,🏡 美洲家宽,🌍 非洲节点,🏡 非洲家宽,🏡 其他家宽,DIRECT
-# ══════════════════════════════════════════════════════════════════════════════
-#  [Rule] — 规则引擎
-#  ────────────────────────────────────────────────────────────────────────────
-#  规则顺序原则（原版 v5.2.2 防吞盾 + 优先级）
-#    1. 广告拦截/威胁情报（最前，强制 REJECT）
-#    2. 私有网段/本地服务（DIRECT）
-#    3. 防吞盾：Google 子服务精确规则（前置于 szkane-ai）
-#    4. 33 业务组规则（按 AI → Crypto → Payments → Email → IM → Social → Work
-#       → CNMedia → Stream_Platform → Stream_HK/TW/JP/EU → Games
-#       → Search → Dev → MS → Apple → Download → CDN → Tracker → Payments(ID)
-#       → INTL_SITE → CN_SITE → GFW → FINAL 顺序）
-#    5. GEOIP CN 兜底
-#    6. FINAL 漏网之鱼
-#
-#  规则源说明
-#    • bm7 = https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket
-#    • szkane = https://fastly.jsdelivr.net/gh/szkane/ClashRuleSet@main/Clash
-#    • loyal = https://fastly.jsdelivr.net/gh/Loyalsoldier/surge-rules@release（SR 兼容）
-#    • sukka = https://ruleset.skk.moe（Surge 格式，SR 兼容）
-#    • acc = https://fastly.jsdelivr.net/gh/Accademia/Additional_Rule_For_Clash@main
-#      （YAML classical，SR 按内容识别解析）
-# ══════════════════════════════════════════════════════════════════════════════
-
-[Rule]
-
-# ─── 阶段 1: 广告拦截与威胁情报 ───────────────────────────────────────────────
-# Anti-ad false-positive allowlist: keep before all ad/phishing providers.
-# See docs/GEOSITE_COVERAGE_LEDGER.md for ownership and update rules.
-# v5.4.2 P0-FIX#41: 小米核心服务 DIRECT 白名单——前置 miuiprivacy/advertisingmitv 防误杀
-DOMAIN-SUFFIX,account.xiaomi.com,DIRECT
-DOMAIN-SUFFIX,passport.xiaomi.com,DIRECT
-DOMAIN-SUFFIX,micloud.xiaomi.com,DIRECT
-DOMAIN,i.mi.com,DIRECT
-DOMAIN,auth.be.sec.miui.com,DIRECT
-DOMAIN,idm.api.io.mi.com,DIRECT
-DOMAIN,api.installer.xiaomi.com,DIRECT
-DOMAIN,flash.sec.miui.com,DIRECT
-DOMAIN,mazu.sec.miui.com,DIRECT
-DOMAIN,ccc.sys.miui.com,DIRECT
-DOMAIN,register.xmpush.xiaomi.com,DIRECT
-# v5.4.14 FIX#CF-R2: Sukka reject_phishing 当前包含 Cloudflare R2 存储域，需前置覆盖首匹配。
-DOMAIN-SUFFIX,cloudflarestorage.com,🌐 国外网站
-# v5.4.16 FIX#149: anti-AD/DustinWin 当前包含 analytics.paddle.com；Antigravity 登录需放行 Paddle 许可/支付链路。
-DOMAIN-SUFFIX,paddle.com,🏦 金融支付
-# v5.4.19 #2 借鉴 Proxy-override：国内推送 SDK 直连前置（jpush/umeng 承载合法 App 推送/消息，强制 DIRECT，与 mihomo 家族对齐）。
-DOMAIN-SUFFIX,jpush.cn,DIRECT
-DOMAIN-SUFFIX,jpush.io,DIRECT
-DOMAIN,msg.umeng.com,DIRECT
-# v5.4.22 GeTui(个推)推送 SDK 直连——延续 #2（承载 App 推送如米家）
-DOMAIN-SUFFIX,getui.com,DIRECT
-DOMAIN-SUFFIX,getui.net,DIRECT
-DOMAIN-SUFFIX,gepush.com,DIRECT
-# anti-AD（DustinWin 同源 privacy-protection-tools/anti-AD）
-RULE-SET,https://fastly.jsdelivr.net/gh/privacy-protection-tools/anti-AD@master/anti-ad-surge.txt,🛑 广告拦截
-# SukkaW 非 IP 拦截（广告/隐私/反钓鱼；SR 不支持 domainset，使用 non_ip 通用格式）
-RULE-SET,https://ruleset.skk.moe/List/non_ip/reject.conf,🛑 广告拦截
-# blackmatrix7 广告/隐私/营销追踪规则集（SR 原生）
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Advertising/Advertising.list,🛑 广告拦截
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/AdvertisingMiTV/AdvertisingMiTV.list,🛑 广告拦截
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/AdobeActivation/AdobeActivation.list,🛑 广告拦截
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/BlockHttpDNS/BlockHttpDNS.list,🛑 广告拦截
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Domob/Domob.list,🛑 广告拦截
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Hijacking/Hijacking.list,🛑 广告拦截
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/JiGuangTuiSong/JiGuangTuiSong.list,🛑 广告拦截
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Marketing/Marketing.list,🛑 广告拦截
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/MIUIPrivacy/MIUIPrivacy.list,🛑 广告拦截
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Privacy/Privacy.list,🛑 广告拦截
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/YouMengChuangXiang/YouMengChuangXiang.list,🛑 广告拦截
-
-
-# ─── 阶段 2: 私有网段与本地服务 ───────────────────────────────────────────────
-# 私有 IP（Surge 格式，SR 兼容）
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Lan/Lan.list,DIRECT
-# 常用 LAN 段兜底
-IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
-IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
-IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
-IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
-IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
-IP-CIDR,169.254.0.0/16,DIRECT,no-resolve
-IP-CIDR,224.0.0.0/4,DIRECT,no-resolve
-IP-CIDR6,::1/128,DIRECT,no-resolve
-IP-CIDR6,fc00::/7,DIRECT,no-resolve
-IP-CIDR6,fe80::/10,DIRECT,no-resolve
-
-# 原版业务 IP 直连（Windows Delivery Optimization 屏蔽 + IP 检测域名）
-DST-PORT,7680,REJECT
-DOMAIN,ip.cip.cc,DIRECT
-# 原版 PROCESS-NAME/DST-PORT 业务规则 → iOS 无法识别进程，保留端口规则
-DST-PORT,123,DIRECT
-DST-PORT,3478,DIRECT
-DST-PORT,3479,DIRECT
-DST-PORT,5349,DIRECT
-DST-PORT,19302,DIRECT
-DST-PORT,19305,DIRECT
-DST-PORT,19307,DIRECT
-
-
-# ─── 阶段 3: 防吞盾 — Google 子服务精准分流（前置于 szkane AI 宽规则） ───────
-# 原版 v5.1.8 FIX#11-P0：dns.google 是 DoH 服务，防止被 AI 组吞入
-# v5.2.10 FIX#39：由 ☁️ 云与CDN 改路由到 🚫 受限网站（dns.google 在境内被封；防 CDN 组被设直连）
-DOMAIN,dns.google,🚫 受限网站
-DOMAIN,dns.google.com,🚫 受限网站
-# 原版 v5.1.8 FIX#14-P0：YouTube/googlevideo 被 AI 宽规则吞入
-DOMAIN-SUFFIX,youtube.com,📹 YouTube
-DOMAIN-SUFFIX,youtu.be,📹 YouTube
-DOMAIN-SUFFIX,googlevideo.com,📹 YouTube
-DOMAIN-SUFFIX,ytimg.com,📹 YouTube
-DOMAIN-SUFFIX,ggpht.com,📹 YouTube
-DOMAIN-SUFFIX,youtube-nocookie.com,📹 YouTube
-DOMAIN-SUFFIX,youtubekids.com,📹 YouTube
-# Google 邮件
-DOMAIN-SUFFIX,gmail.com,🌐 国外网站
-DOMAIN-SUFFIX,googlemail.com,🌐 国外网站
-DOMAIN,mail.google.com,🌐 国外网站
-DOMAIN,inbox.google.com,🌐 国外网站
-# Google Voice
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/GoogleVoice/GoogleVoice.list,💬 即时通讯
-# Google Meet
-DOMAIN-SUFFIX,meet.google.com,🧑‍💼 会议协作
-DOMAIN,meet.googleapis.com,🧑‍💼 会议协作
-# Google 下载/推送
-DOMAIN-SUFFIX,dl.google.com,📥 下载更新
-DOMAIN-SUFFIX,play.googleapis.com,📥 下载更新
-DOMAIN-SUFFIX,android.clients.google.com,📥 下载更新
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/GoogleFCM/GoogleFCM.list,📥 下载更新
-# Google 搜索（总兜底放在具体规则后）
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/GoogleSearch/GoogleSearch.list,🔍 Google 服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/GoogleDrive/GoogleDrive.list,🔍 Google 服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/GoogleEarth/GoogleEarth.list,🔍 Google 服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Google/Google.list,🔍 Google 服务
-
-
-# ─── 阶段 4: AI 服务（Crypto 核心业务依赖，优先级高） ───────────────────────
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/OpenAI/OpenAI.list,🤖 AI 服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Claude/Claude.list,🤖 AI 服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Gemini/Gemini.list,🤖 AI 服务
-# v5.4.10 FIX#RD-COPILOT: RustDesk relay 可落到 Copilot.list 的 AS20473，需前置防吞
-DOMAIN-SUFFIX,rustdesk.com,🧑‍💼 会议协作
-# v5.4.26 FIX#164: 腾讯 WorkBuddy copilot.tencent.com 国内直连防吞——szkane AiDomain.list 的 DOMAIN-KEYWORD,copilot 子串会误吞到 🤖 AI 服务（国外代理）
-DOMAIN-SUFFIX,copilot.tencent.com,🏠 国内网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Copilot/Copilot.list,🤖 AI 服务
-# szkane AI 综合（OpenAI/Claude/Grok/Perplexity/Gemini 合并）
-RULE-SET,https://fastly.jsdelivr.net/gh/szkane/ClashRuleSet@main/Clash/Ruleset/AiDomain.list,🤖 AI 服务
-RULE-SET,https://fastly.jsdelivr.net/gh/szkane/ClashRuleSet@main/Clash/Ruleset/CiciAi.list,🤖 AI 服务
-# 原版 FIX#13-P2: 微软 Delivery Optimization 遥测非 AI，前置拦截
-DOMAIN-SUFFIX,do.dsp.mp.microsoft.com,📥 下载更新
-# 常用 AI 域名兜底
-DOMAIN-SUFFIX,perplexity.ai,🤖 AI 服务
-DOMAIN-SUFFIX,mistral.ai,🤖 AI 服务
-DOMAIN-SUFFIX,x.ai,🤖 AI 服务
-DOMAIN-SUFFIX,grok.com,🤖 AI 服务
-DOMAIN-SUFFIX,huggingface.co,🤖 AI 服务
-DOMAIN-SUFFIX,replicate.com,🤖 AI 服务
-DOMAIN-SUFFIX,together.ai,🤖 AI 服务
-DOMAIN-SUFFIX,cohere.ai,🤖 AI 服务
-DOMAIN-SUFFIX,cohere.com,🤖 AI 服务
-DOMAIN-SUFFIX,midjourney.com,🤖 AI 服务
-DOMAIN-SUFFIX,stability.ai,🤖 AI 服务
-DOMAIN-SUFFIX,cursor.com,🤖 AI 服务
-DOMAIN-SUFFIX,cursor.sh,🤖 AI 服务
-DOMAIN-SUFFIX,v0.dev,🤖 AI 服务
-DOMAIN-SUFFIX,vercel.ai,🤖 AI 服务
-DOMAIN-SUFFIX,notebooklm.google,🤖 AI 服务
-DOMAIN-SUFFIX,poe.com,🤖 AI 服务
-DOMAIN-SUFFIX,character.ai,🤖 AI 服务
-DOMAIN-SUFFIX,suno.ai,🤖 AI 服务
-DOMAIN-SUFFIX,suno.com,🤖 AI 服务
-DOMAIN-SUFFIX,runway.ml,🤖 AI 服务
-DOMAIN-SUFFIX,runwayml.com,🤖 AI 服务
-DOMAIN-SUFFIX,openrouter.ai,🤖 AI 服务
-DOMAIN-SUFFIX,fireworks.ai,🤖 AI 服务
-DOMAIN-SUFFIX,modal.com,🤖 AI 服务
-DOMAIN-SUFFIX,modal.run,🤖 AI 服务
-DOMAIN-SUFFIX,runpod.io,🤖 AI 服务
-# DeepSeek 国内直连
-DOMAIN-SUFFIX,deepseek.com,🏠 国内网站
-# PI.ai/Inflection → GFW（中国需代理，印尼可直连）
-DOMAIN-SUFFIX,inflection.ai,🚫 受限网站
-DOMAIN-SUFFIX,pi.ai,🚫 受限网站
-# Civitai AI 模型社区
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Civitai/Civitai.list,🤖 AI 服务
-
-
-# ─── 阶段 5: 加密货币与量化交易 ───────────────────────────────────────────────
-# Binance
-DOMAIN-SUFFIX,binance.vision,💰 加密货币
-DOMAIN-SUFFIX,binance.info,💰 加密货币
-DOMAIN-SUFFIX,binance.cloud,💰 加密货币
-DOMAIN-SUFFIX,binance.me,💰 加密货币
-DOMAIN-SUFFIX,binance.org,💰 加密货币
-DOMAIN-SUFFIX,binancefuture.com,💰 加密货币
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Binance/Binance.list,💰 加密货币
-# TradingView / Coinglass / Hyperliquid
-DOMAIN-SUFFIX,tradingview.com,💰 加密货币
-DOMAIN-SUFFIX,tvcdn.com,💰 加密货币
-DOMAIN-SUFFIX,coinglass.com,💰 加密货币
-DOMAIN-SUFFIX,hyperliquid.xyz,💰 加密货币
-DOMAIN-SUFFIX,hyperliquid-testnet.xyz,💰 加密货币
-DOMAIN-SUFFIX,eth.limo,💰 加密货币
-DOMAIN-SUFFIX,glitternode.ru,💰 加密货币
-# bm7 Cryptocurrency
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Cryptocurrency/Cryptocurrency.list,💰 加密货币
-# szkane Web3（DeFi/NFT/区块链 RPC）★量化交易核心
-RULE-SET,https://fastly.jsdelivr.net/gh/szkane/ClashRuleSet@main/Clash/Web3.list,💰 加密货币
-
-
-# ─── 阶段 6: 金融支付 ─────────────────────────────────────────────────────────
-# PayPal
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/PayPal/PayPal.list,🏦 金融支付
-# Stripe
-DOMAIN-SUFFIX,stripe.com,🏦 金融支付
-DOMAIN-SUFFIX,stripe.network,🏦 金融支付
-DOMAIN-SUFFIX,stripecdn.com,🏦 金融支付
-DOMAIN-SUFFIX,stripe.dev,🏦 金融支付
-# Wise / Revolut
-DOMAIN-SUFFIX,wise.com,🏦 金融支付
-DOMAIN-SUFFIX,transferwise.com,🏦 金融支付
-DOMAIN-SUFFIX,revolut.com,🏦 金融支付
-DOMAIN-SUFFIX,revolut.me,🏦 金融支付
-# Braintree / Venmo / Cash / Square / Adyen
-DOMAIN-SUFFIX,braintree-api.com,🏦 金融支付
-DOMAIN-SUFFIX,cash.app,🏦 金融支付
-DOMAIN-SUFFIX,squareup.com,🏦 金融支付
-DOMAIN-SUFFIX,square.com,🏦 金融支付
-DOMAIN-SUFFIX,adyen.com,🏦 金融支付
-DOMAIN-SUFFIX,checkout.com,🏦 金融支付
-DOMAIN-SUFFIX,klarna.com,🏦 金融支付
-DOMAIN-SUFFIX,afterpay.com,🏦 金融支付
-DOMAIN-SUFFIX,plaid.com,🏦 金融支付
-# 印尼本地支付
-DOMAIN-SUFFIX,midtrans.com,🏦 金融支付
-DOMAIN-SUFFIX,gopay.co.id,🏦 金融支付
-DOMAIN-SUFFIX,ovo.id,🏦 金融支付
-DOMAIN-SUFFIX,dana.id,🏦 金融支付
-DOMAIN-SUFFIX,shopeepay.co.id,🏦 金融支付
-DOMAIN-SUFFIX,xendit.co,🏦 金融支付
-DOMAIN-SUFFIX,doku.com,🏦 金融支付
-# 印尼银行/证券（v5.1.5 归入金融支付）
-DOMAIN-SUFFIX,bca.co.id,🏦 金融支付
-DOMAIN-SUFFIX,klikbca.com,🏦 金融支付
-DOMAIN-SUFFIX,bni.co.id,🏦 金融支付
-DOMAIN-SUFFIX,bri.co.id,🏦 金融支付
-DOMAIN-SUFFIX,bankmandiri.co.id,🏦 金融支付
-DOMAIN-SUFFIX,danamon.co.id,🏦 金融支付
-DOMAIN-SUFFIX,permatabank.com,🏦 金融支付
-DOMAIN-SUFFIX,cimbniaga.co.id,🏦 金融支付
-DOMAIN-SUFFIX,btn.co.id,🏦 金融支付
-DOMAIN-SUFFIX,ocbcnisp.com,🏦 金融支付
-DOMAIN-SUFFIX,banksinarmas.com,🏦 金融支付
-DOMAIN-SUFFIX,idx.co.id,🏦 金融支付
-DOMAIN-SUFFIX,ksei.co.id,🏦 金融支付
-# bm7 支付规则集
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Stripe/Stripe.list,🏦 金融支付
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/VISA/VISA.list,🏦 金融支付
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/TigerFintech/TigerFintech.list,🏦 金融支付
-# 虚拟金融兜底（替代已移除的 Accademia VirtualFinance YAML）
-DOMAIN-SUFFIX,monzo.com,🏦 金融支付
-DOMAIN-SUFFIX,n26.com,🏦 金融支付
-DOMAIN-SUFFIX,chime.com,🏦 金融支付
-# 主要国际银行兜底（替代已移除的 Accademia Bank × 10 国家级 YAML；欲全量覆盖请换 CMFA/OpenClash/SingBox）
-DOMAIN-SUFFIX,chase.com,🏦 金融支付
-DOMAIN-SUFFIX,bankofamerica.com,🏦 金融支付
-DOMAIN-SUFFIX,wellsfargo.com,🏦 金融支付
-DOMAIN-SUFFIX,citi.com,🏦 金融支付
-DOMAIN-SUFFIX,citibank.com,🏦 金融支付
-DOMAIN-SUFFIX,hsbc.com,🏦 金融支付
-DOMAIN-SUFFIX,hsbc.com.hk,🏦 金融支付
-DOMAIN-SUFFIX,barclays.co.uk,🏦 金融支付
-DOMAIN-SUFFIX,lloydsbank.com,🏦 金融支付
-DOMAIN-SUFFIX,santander.com,🏦 金融支付
-DOMAIN-SUFFIX,db.com,🏦 金融支付
-DOMAIN-SUFFIX,deutsche-bank.de,🏦 金融支付
-DOMAIN-SUFFIX,ing.nl,🏦 金融支付
-DOMAIN-SUFFIX,bnpparibas.com,🏦 金融支付
-DOMAIN-SUFFIX,sgmarkets.com,🏦 金融支付
-DOMAIN-SUFFIX,ocbc.com,🏦 金融支付
-DOMAIN-SUFFIX,uobgroup.com,🏦 金融支付
-DOMAIN-SUFFIX,dbs.com,🏦 金融支付
-DOMAIN-SUFFIX,dbs.com.sg,🏦 金融支付
-DOMAIN-SUFFIX,mufg.jp,🏦 金融支付
-DOMAIN-SUFFIX,smbc.co.jp,🏦 金融支付
-DOMAIN-SUFFIX,mizuhobank.com,🏦 金融支付
-DOMAIN-SUFFIX,rbc.com,🏦 金融支付
-DOMAIN-SUFFIX,td.com,🏦 金融支付
-DOMAIN-SUFFIX,scotiabank.com,🏦 金融支付
-DOMAIN-SUFFIX,cba.com.au,🏦 金融支付
-DOMAIN-SUFFIX,anz.com,🏦 金融支付
-DOMAIN-SUFFIX,westpac.com.au,🏦 金融支付
-
-
-# ─── 阶段 7: 邮件服务 ─────────────────────────────────────────────────────────
-# 微软服务域名前置（防止吞入邮件组）
-DOMAIN,login.live.com,Ⓜ️ 微软服务
-DOMAIN,g.live.com,Ⓜ️ 微软服务
-DOMAIN-SUFFIX,officeapps.live.com,Ⓜ️ 微软服务
-# 国外邮箱
-DOMAIN-SUFFIX,outlook.com,🌐 国外网站
-DOMAIN-SUFFIX,outlook.live.com,🌐 国外网站
-DOMAIN-SUFFIX,hotmail.com,🌐 国外网站
-DOMAIN,mail.live.com,🌐 国外网站
-DOMAIN,outlook.office365.com,🌐 国外网站
-DOMAIN,outlook.office.com,🌐 国外网站
-DOMAIN,mail.yahoo.com,🌐 国外网站
-DOMAIN-SUFFIX,ymail.com,🌐 国外网站
-DOMAIN-SUFFIX,proton.me,🌐 国外网站
-DOMAIN-SUFFIX,pm.me,🌐 国外网站
-DOMAIN-SUFFIX,tutanota.com,🌐 国外网站
-DOMAIN-SUFFIX,tuta.com,🌐 国外网站
-# Zoho 邮件（收窄防吞会议协作）
-DOMAIN,mail.zoho.com,🌐 国外网站
-DOMAIN,mail.zoho.eu,🌐 国外网站
-DOMAIN,mail.zoho.in,🌐 国外网站
-DOMAIN,mail.zoho.com.au,🌐 国外网站
-DOMAIN,mail.zoho.jp,🌐 国外网站
-DOMAIN,mail.me.com,🌐 国外网站
-DOMAIN-SUFFIX,fastmail.com,🌐 国外网站
-DOMAIN-SUFFIX,fastmail.fm,🌐 国外网站
-# bm7 邮件规则集
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Mail/Mail.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Mailru/Mailru.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Protonmail/Protonmail.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Spark/Spark.list,🌐 国外网站
-# 国内邮箱直连
-DOMAIN-SUFFIX,mail.qq.com,DIRECT
-DOMAIN-SUFFIX,cdn.weixin.qq.com,DIRECT
-DOMAIN-SUFFIX,mail.163.com,DIRECT
-DOMAIN-SUFFIX,mail.126.com,DIRECT
-DOMAIN-SUFFIX,mail.sina.com.cn,DIRECT
-DOMAIN-SUFFIX,mail.aliyun.com,DIRECT
-
-
-# ─── 阶段 8: 即时通讯 ─────────────────────────────────────────────────────────
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Telegram/Telegram.list,💬 即时通讯
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Discord/Discord.list,💬 即时通讯
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Whatsapp/Whatsapp.list,💬 即时通讯
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Line/Line.list,💬 即时通讯
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/KakaoTalk/KakaoTalk.list,💬 即时通讯
-# Skype / Signal / Viber / Element 等
-DOMAIN-SUFFIX,skype.com,💬 即时通讯
-DOMAIN-SUFFIX,skypeecs.net,💬 即时通讯
-DOMAIN-SUFFIX,skypeforbusiness.com,💬 即时通讯
-DOMAIN-SUFFIX,sfbassets.com,💬 即时通讯
-DOMAIN-SUFFIX,lync.com,💬 即时通讯
-DOMAIN-SUFFIX,signal.org,💬 即时通讯
-DOMAIN-SUFFIX,whispersystems.org,💬 即时通讯
-DOMAIN-SUFFIX,signal.art,💬 即时通讯
-DOMAIN-SUFFIX,viber.com,💬 即时通讯
-DOMAIN-SUFFIX,viber.io,💬 即时通讯
-DOMAIN-SUFFIX,element.io,💬 即时通讯
-DOMAIN-SUFFIX,matrix.org,💬 即时通讯
-DOMAIN-SUFFIX,zalo.me,💬 即时通讯
-DOMAIN-SUFFIX,zalopay.vn,💬 即时通讯
-DOMAIN-SUFFIX,wire.com,💬 即时通讯
-DOMAIN-SUFFIX,threema.ch,💬 即时通讯
-# bm7 Telegram 区域 IP 段
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/TelegramNL/TelegramNL.list,💬 即时通讯
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/TelegramSG/TelegramSG.list,💬 即时通讯
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/TelegramUS/TelegramUS.list,💬 即时通讯
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Zalo/Zalo.list,💬 即时通讯
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/iTalkBB/iTalkBB.list,💬 即时通讯
-DOMAIN-SUFFIX,icq.com,💬 即时通讯
-
-
-# ─── 阶段 9: 社交媒体 ─────────────────────────────────────────────────────────
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Twitter/Twitter.list,📱 社交媒体
-# lemon8 也是字节海外社交，跟 TikTok 同组
-DOMAIN-SUFFIX,lemon8-app.com,📱 社交媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Reddit/Reddit.list,📱 社交媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Facebook/Facebook.list,📱 社交媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Instagram/Instagram.list,📱 社交媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Snap/Snap.list,📱 社交媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Pinterest/Pinterest.list,📱 社交媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/LinkedIn/LinkedIn.list,📱 社交媒体
-# 新兴社交平台
-DOMAIN-SUFFIX,mastodon.social,📱 社交媒体
-DOMAIN-SUFFIX,joinmastodon.org,📱 社交媒体
-DOMAIN-SUFFIX,threads.net,📱 社交媒体
-DOMAIN-SUFFIX,bsky.app,📱 社交媒体
-DOMAIN-SUFFIX,bsky.social,📱 社交媒体
-DOMAIN-SUFFIX,quora.com,📱 社交媒体
-DOMAIN-SUFFIX,medium.com,📱 社交媒体
-DOMAIN-SUFFIX,flickr.com,📱 社交媒体
-# bm7 补充
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Tumblr/Tumblr.list,📱 社交媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Clubhouse/Clubhouse.list,📱 社交媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/ClubhouseIP/ClubhouseIP.list,📱 社交媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Pixiv/Pixiv.list,📱 社交媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/TruthSocial/TruthSocial.list,📱 社交媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/VK/VK.list,📱 社交媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Blued/Blued.list,🏠 国内网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Disqus/Disqus.list,📱 社交媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Imgur/Imgur.list,📱 社交媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Pixnet/Pixnet.list,📱 社交媒体
-
-
-# ─── 阶段 10: 会议协作 ────────────────────────────────────────────────────────
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Slack/Slack.list,🧑‍💼 会议协作
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Teams/Teams.list,🧑‍💼 会议协作
-# Zoom（替代已移除的 ACL4SSR Zoom.yaml）
-DOMAIN-SUFFIX,zoom.us,🧑‍💼 会议协作
-DOMAIN-SUFFIX,zoom.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,zoomgov.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,zoomcdn.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,zoomdev.us,🧑‍💼 会议协作
-# Parsec（替代已移除的 Accademia Parsec YAML；RustDesk 防吞盾已前置到 AI 段）
-DOMAIN-SUFFIX,parsec.app,🧑‍💼 会议协作
-DOMAIN-SUFFIX,parsecgaming.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,parsecusercontent.com,🧑‍💼 会议协作
-# Webex / Notion / Figma / Atlassian 等协作工具
-DOMAIN-SUFFIX,webex.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,wbx2.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,ciscospark.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,notion.so,🧑‍💼 会议协作
-DOMAIN-SUFFIX,notion.site,🧑‍💼 会议协作
-DOMAIN-SUFFIX,figma.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,linear.app,🧑‍💼 会议协作
-DOMAIN-SUFFIX,atlassian.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,jira.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,trello.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,bitbucket.org,🧑‍💼 会议协作
-DOMAIN-SUFFIX,asana.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,monday.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,clickup.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,basecamp.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,airtable.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,miro.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,canva.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,coda.io,🧑‍💼 会议协作
-DOMAIN-SUFFIX,loom.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,larksuite.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,larkoffice.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,gotomeeting.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,logmein.com,🧑‍💼 会议协作
-DOMAIN-SUFFIX,goto.com,🧑‍💼 会议协作
-# bm7 会议协作规则集
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Atlassian/Atlassian.list,🧑‍💼 会议协作
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Notion/Notion.list,🧑‍💼 会议协作
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/TeamViewer/TeamViewer.list,🧑‍💼 会议协作
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Zoho/Zoho.list,🧑‍💼 会议协作
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Salesforce/Salesforce.list,🧑‍💼 会议协作
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Zendesk/Zendesk.list,🧑‍💼 会议协作
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Intercom/Intercom.list,🧑‍💼 会议协作
-# 国内协作工具直连
-DOMAIN-SUFFIX,feishu.cn,DIRECT
-DOMAIN-SUFFIX,dingtalk.com,DIRECT
-DOMAIN-SUFFIX,welink.huaweicloud.com,DIRECT
-
-
-
-# ─── 阶段 12B: TikTok ───────────────────────────────────────────────────────────
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/TikTok/TikTok.list,🎵 TikTok
-
-
-# ─── 阶段 13: 平台流媒体（开放平台分流） ──────────────────────────────────────
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/YouTube/YouTube.list,📹 YouTube
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Netflix/Netflix.list,🎥 Netflix
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Spotify/Spotify.list,🎵 音乐流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Disney/Disney.list,🎬 Disney+
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/HBO/HBO.list,📡 HBO/Max
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/PrimeVideo/PrimeVideo.list,🎬 Prime Video
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Hulu/Hulu.list,📺 Hulu
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/ParamountPlus/ParamountPlus.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Peacock/Peacock.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Twitch/Twitch.list,🌐 其他国外流媒体
-# AWS 用户前端先归 Dev/CDN（v5.1.8 防吞）
-DOMAIN-SUFFIX,amazonaws.com,🌐 国外网站
-DOMAIN-SUFFIX,awsstatic.com,🌐 国外网站
-DOMAIN-SUFFIX,aws.amazon.com,🔧 工具与服务
-DOMAIN-SUFFIX,elasticbeanstalk.com,🔧 工具与服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Amazon/Amazon.list,🌐 其他国外流媒体
-# 其它平台流媒体
-DOMAIN-SUFFIX,crunchyroll.com,🌐 其他国外流媒体
-DOMAIN-SUFFIX,vrv.co,🌐 其他国外流媒体
-DOMAIN-SUFFIX,pluto.tv,🌐 其他国外流媒体
-DOMAIN-SUFFIX,tubi.tv,🌐 其他国外流媒体
-DOMAIN-SUFFIX,fubo.tv,🌐 其他国外流媒体
-# CLEAN#165: discoveryplus.com 已被同策略 RULE-SET 覆盖
-DOMAIN-SUFFIX,appletv.com,🌐 其他国外流媒体
-# bm7 其它流媒体补充
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/CBS/CBS.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/NBC/NBC.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/PBS/PBS.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/ATTWatchTV/ATTWatchTV.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Fox/Fox.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/FuboTV/FuboTV.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Sling/Sling.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/SoundCloud/SoundCloud.list,🎵 音乐流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Pandora/Pandora.list,🎵 音乐流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/PandoraTV/PandoraTV.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/TIDAL/TIDAL.list,🎵 音乐流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Vimeo/Vimeo.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Dailymotion/Dailymotion.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Deezer/Deezer.list,🎵 音乐流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/DiscoveryPlus/DiscoveryPlus.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Overcast/Overcast.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Americasvoice/Americasvoice.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Cake/Cake.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Dood/Dood.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/LastFM/LastFM.list,🎵 音乐流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Emby/Emby.list,🌐 其他国外流媒体
-# szkane Netflix IP 段补充
-RULE-SET,https://fastly.jsdelivr.net/gh/szkane/ClashRuleSet@main/Clash/Ruleset/NetflixIP.list,🎥 Netflix
-
-
-# ─── 阶段 14: 香港流媒体 ──────────────────────────────────────────────────────
-# CLEAN#165: mytvsuper.com, nowe.com, rthk.hk, cabletv.com.hk 已被同策略 RULE-SET 覆盖
-DOMAIN-SUFFIX,mytv.com.hk,🇭🇰 香港流媒体
-DOMAIN-SUFFIX,viu.com,🇭🇰 香港流媒体
-DOMAIN-SUFFIX,viu.tv,🇭🇰 香港流媒体
-DOMAIN-SUFFIX,hktv.com.hk,🇭🇰 香港流媒体
-DOMAIN-SUFFIX,hktvmall.com,🇭🇰 香港流媒体
-DOMAIN-SUFFIX,nowtv.com,🇭🇰 香港流媒体
-DOMAIN-SUFFIX,icable.com,🇭🇰 香港流媒体
-DOMAIN-SUFFIX,hmvod.com.hk,🇭🇰 香港流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/myTVSUPER/myTVSUPER.list,🇭🇰 香港流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/TVB/TVB.list,🇭🇰 香港流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/EncoreTVB/EncoreTVB.list,🇭🇰 香港流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/NowE/NowE.list,🇭🇰 香港流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/RTHK/RTHK.list,🇭🇰 香港流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/CableTV/CableTV.list,🇭🇰 香港流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/MOOV/MOOV.list,🇭🇰 香港流媒体
-
-
-# ─── 阶段 15: 台湾流媒体 ──────────────────────────────────────────────────────
-# CLEAN#165: litv.tv, video.friday.tw, friday.tw, linetv.tw, hamivideo.hinet.net 已被同策略 RULE-SET 覆盖
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Bahamut/Bahamut.list,🇹🇼 台湾流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/KKTV/KKTV.list,🇹🇼 台湾流媒体
-DOMAIN-SUFFIX,elta.tv,🇹🇼 台湾流媒体
-DOMAIN-SUFFIX,mod.cht.com.tw,🇹🇼 台湾流媒体
-DOMAIN-SUFFIX,ofiii.com,🇹🇼 台湾流媒体
-DOMAIN-SUFFIX,pts.org.tw,🇹🇼 台湾流媒体
-DOMAIN-SUFFIX,4gtv.tv,🇹🇼 台湾流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/LiTV/LiTV.list,🇹🇼 台湾流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/friDay/friDay.list,🇹🇼 台湾流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/HamiVideo/HamiVideo.list,🇹🇼 台湾流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/LineTV/LineTV.list,🇹🇼 台湾流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/VidolTV/VidolTV.list,🇹🇼 台湾流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/TaiWanGood/TaiWanGood.list,🇹🇼 台湾流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/CHT/CHT.list,🇹🇼 台湾流媒体
-
-
-# ─── 阶段 16: 日韩流媒体 ──────────────────────────────────────────────────────
-# CLEAN#165: tver.jp, dmm.com, dmm.co.jp, nicovideo.jp, nicovideo.me, dmc.nico 已被同策略 RULE-SET 覆盖
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Abema/Abema.list,🇯🇵 日韩流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/DAZN/DAZN.list,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,unext.jp,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,video.unext.jp,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,nhk.jp,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,nhk.or.jp,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,dtv.jp,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,paravi.jp,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,videomarket.jp,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,fod.fujitv.co.jp,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,gyao.yahoo.co.jp,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,music.jp,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,radiko.jp,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,lemino.docomo.ne.jp,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,wowow.co.jp,🇯🇵 日韩流媒体
-# 韩国流媒体
-DOMAIN-SUFFIX,wavve.com,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,tving.com,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,watcha.com,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,coupangplay.com,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,sbs.co.kr,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,kbs.co.kr,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,mbc.co.kr,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,jtbc.co.kr,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,tvn.cjenm.com,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,afreecatv.com,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,tv.naver.com,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,now.naver.com,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,vod.naver.com,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,navertv.naver.com,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,kakaotv.daum.net,🇯🇵 日韩流媒体
-DOMAIN-SUFFIX,navercorp.com,🇯🇵 日韩流媒体
-# bm7 补充
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/DMM/DMM.list,🇯🇵 日韩流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/TVer/TVer.list,🇯🇵 日韩流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Niconico/Niconico.list,🇯🇵 日韩流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Rakuten/Rakuten.list,🇯🇵 日韩流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Japonx/Japonx.list,🇯🇵 日韩流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Nikkei/Nikkei.list,🇯🇵 日韩流媒体
-
-
-# ─── 阶段 17: 欧洲流媒体 ──────────────────────────────────────────────────────
-# CLEAN#165: itv.com, itvstatic.com, britbox.com 已被同策略 RULE-SET 覆盖
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/BBC/BBC.list,🇪🇺 欧洲流媒体
-# 英国
-DOMAIN-SUFFIX,channel4.com,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,channel5.com,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,sky.com,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,nowtv.co.uk,🇪🇺 欧洲流媒体
-# 法国
-DOMAIN-SUFFIX,canalplus.com,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,mycanal.fr,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,france.tv,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,tf1.fr,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,molotov.tv,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,arte.tv,🇪🇺 欧洲流媒体
-# 德国
-DOMAIN-SUFFIX,joyn.de,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,zdf.de,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,ard.de,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,ardmediathek.de,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,rtlplus.com,🇪🇺 欧洲流媒体
-# 其它欧洲
-DOMAIN-SUFFIX,raiplay.it,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,rtve.es,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,videoland.com,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,ruutu.fi,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,tv2.dk,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,svtplay.se,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,nrk.no,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,ivi.ru,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,kinopoisk.ru,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,okko.tv,🇪🇺 欧洲流媒体
-DOMAIN-SUFFIX,more.tv,🇪🇺 欧洲流媒体
-# bm7 欧洲流媒体补充
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/ITV/ITV.list,🇪🇺 欧洲流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/All4/All4.list,🇪🇺 欧洲流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/My5/My5.list,🇪🇺 欧洲流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/SkyGO/SkyGO.list,🇪🇺 欧洲流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/BritboxUK/BritboxUK.list,🇪🇺 欧洲流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/LondonReal/LondonReal.list,🇪🇺 欧洲流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Qobuz/Qobuz.list,🇪🇺 欧洲流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/szkane/ClashRuleSet@main/Clash/Ruleset/UK.list,🇪🇺 欧洲流媒体
-
-
-
-# ─── 阶段 12: 其他国外流媒体（原东南亚流媒体） ────────────────────────────────
-# CLEAN#165: wetv.vip, wetvinfo.com, viki.com, viki.io, mewatch.sg 已被同策略 RULE-SET 覆盖
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/ViuTV/ViuTV.list,🌐 其他国外流媒体
-DOMAIN-SUFFIX,iq.com,🌐 其他国外流媒体
-# 印尼本地流媒体
-DOMAIN-SUFFIX,vidio.com,🌐 其他国外流媒体
-DOMAIN-SUFFIX,vidio.static6.com,🌐 其他国外流媒体
-DOMAIN-SUFFIX,rctiplus.com,🌐 其他国外流媒体
-DOMAIN-SUFFIX,visionplus.id,🌐 其他国外流媒体
-DOMAIN-SUFFIX,genflix.co.id,🌐 其他国外流媒体
-DOMAIN-SUFFIX,goplay.co.id,🌐 其他国外流媒体
-DOMAIN-SUFFIX,maxstream.tv,🌐 其他国外流媒体
-# B 站国际版
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/BiliBiliIntl/BiliBiliIntl.list,🌐 其他国外流媒体
-# 东南亚其它流媒体
-DOMAIN-SUFFIX,iflix.com,🌐 其他国外流媒体
-DOMAIN-SUFFIX,catchplay.com,🌐 其他国外流媒体
-DOMAIN-SUFFIX,trueid.net,🌐 其他国外流媒体
-DOMAIN-SUFFIX,dimsum.my,🌐 其他国外流媒体
-# bm7 亚洲流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/AsianMedia/AsianMedia.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/iQIYIIntl/iQIYIIntl.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/JOOX/JOOX.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/MeWatch/MeWatch.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Viki/Viki.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/WeTV/WeTV.list,🌐 其他国外流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Zee/Zee.list,🌐 其他国外流媒体
-
-
-# ─── 阶段 20: 搜索引擎 ────────────────────────────────────────────────────────
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Bing/Bing.list,🔧 工具与服务
-DOMAIN-SUFFIX,yahoo.com,🔧 工具与服务
-DOMAIN-SUFFIX,yahoo.co.jp,🔧 工具与服务
-DOMAIN-SUFFIX,duckduckgo.com,🔧 工具与服务
-DOMAIN-SUFFIX,ddg.co,🔧 工具与服务
-DOMAIN-SUFFIX,brave.com,🔧 工具与服务
-DOMAIN-SUFFIX,yandex.com,🔧 工具与服务
-DOMAIN-SUFFIX,yandex.ru,🔧 工具与服务
-DOMAIN-SUFFIX,ecosia.org,🔧 工具与服务
-DOMAIN-SUFFIX,startpage.com,🔧 工具与服务
-DOMAIN-SUFFIX,you.com,🔧 工具与服务
-DOMAIN-SUFFIX,search.naver.com,🔧 工具与服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Scholar/Scholar.list,🔍 Google 服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Yandex/Yandex.list,🔧 工具与服务
-
-
-# ─── 阶段 21: 开发者服务 ──────────────────────────────────────────────────────
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/GitHub/GitHub.list,🔧 工具与服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Docker/Docker.list,🔧 工具与服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/GitLab/GitLab.list,🔧 工具与服务
-# 包管理器
-DOMAIN-SUFFIX,npmjs.com,🔧 工具与服务
-DOMAIN-SUFFIX,npmjs.org,🔧 工具与服务
-DOMAIN-SUFFIX,yarnpkg.com,🔧 工具与服务
-DOMAIN-SUFFIX,pypi.org,🔧 工具与服务
-DOMAIN-SUFFIX,pythonhosted.org,🔧 工具与服务
-DOMAIN-SUFFIX,crates.io,🔧 工具与服务
-DOMAIN-SUFFIX,rubygems.org,🔧 工具与服务
-DOMAIN-SUFFIX,packagist.org,🔧 工具与服务
-DOMAIN-SUFFIX,maven.org,🔧 工具与服务
-DOMAIN-SUFFIX,nuget.org,🔧 工具与服务
-DOMAIN-SUFFIX,cocoapods.org,🔧 工具与服务
-# 开发社区
-DOMAIN-SUFFIX,stackoverflow.com,🔧 工具与服务
-DOMAIN-SUFFIX,stackexchange.com,🔧 工具与服务
-DOMAIN-SUFFIX,sstatic.net,🔧 工具与服务
-# PaaS / Serverless
-DOMAIN-SUFFIX,vercel.com,🔧 工具与服务
-DOMAIN-SUFFIX,vercel.app,🔧 工具与服务
-DOMAIN-SUFFIX,netlify.app,🔧 工具与服务
-DOMAIN-SUFFIX,netlify.com,🔧 工具与服务
-DOMAIN-SUFFIX,pages.dev,🔧 工具与服务
-DOMAIN-SUFFIX,workers.dev,🔧 工具与服务
-# Cloudflare 开发者入口（精确匹配，不吞 cdnjs 等 CDN 子域名）
-DOMAIN,dash.cloudflare.com,🔧 工具与服务
-DOMAIN,api.cloudflare.com,🔧 工具与服务
-DOMAIN,developers.cloudflare.com,🔧 工具与服务
-DOMAIN,www.cloudflare.com,🔧 工具与服务
-DOMAIN-SUFFIX,heroku.com,🔧 工具与服务
-DOMAIN-SUFFIX,herokuapp.com,🔧 工具与服务
-DOMAIN-SUFFIX,fly.io,🔧 工具与服务
-DOMAIN-SUFFIX,railway.app,🔧 工具与服务
-DOMAIN-SUFFIX,render.com,🔧 工具与服务
-DOMAIN-SUFFIX,supabase.com,🔧 工具与服务
-DOMAIN-SUFFIX,supabase.co,🔧 工具与服务
-DOMAIN-SUFFIX,planetscale.com,🔧 工具与服务
-DOMAIN-SUFFIX,neon.tech,🔧 工具与服务
-DOMAIN-SUFFIX,digitalocean.com,🔧 工具与服务
-DOMAIN-SUFFIX,vultr.com,🔧 工具与服务
-DOMAIN-SUFFIX,linode.com,🔧 工具与服务
-DOMAIN-SUFFIX,sentry.io,🔧 工具与服务
-DOMAIN-SUFFIX,datadog.com,🔧 工具与服务
-DOMAIN-SUFFIX,grafana.com,🔧 工具与服务
-DOMAIN-SUFFIX,postman.com,🔧 工具与服务
-DOMAIN-SUFFIX,jetbrains.com,🔧 工具与服务
-DOMAIN-SUFFIX,hashicorp.com,🔧 工具与服务
-DOMAIN-SUFFIX,terraform.io,🔧 工具与服务
-DOMAIN-SUFFIX,vagrantup.com,🔧 工具与服务
-# bm7 开发者规则集
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Developer/Developer.list,🔧 工具与服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Python/Python.list,🔧 工具与服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/GitBook/GitBook.list,🔧 工具与服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Jfrog/Jfrog.list,🔧 工具与服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/SublimeText/SublimeText.list,🔧 工具与服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Wordpress/Wordpress.list,🔧 工具与服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/WIX/WIX.list,🔧 工具与服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Cisco/Cisco.list,🔧 工具与服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/IBM/IBM.list,🔧 工具与服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Oracle/Oracle.list,🔧 工具与服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Unity/Unity.list,🔧 工具与服务
-# szkane Developer（Docker 镜像/HuggingFace 模型下载）
-RULE-SET,https://fastly.jsdelivr.net/gh/szkane/ClashRuleSet@main/Clash/Ruleset/Developer.list,🔧 工具与服务
-
-
-# ─── 阶段 25: 云与 CDN ────────────────────────────────────────────────────────
-# bm7 Cloudflare / Fastly / CloudFront IP 段（需要 no-resolve 避免解析消耗）
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Cloudflare/Cloudflare.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Akamai/Akamai.list,🌐 国外网站
-# Akamai / EdgeKey
-DOMAIN-SUFFIX,akamai.net,🌐 国外网站
-DOMAIN-SUFFIX,akamaized.net,🌐 国外网站
-DOMAIN-SUFFIX,akamaihd.net,🌐 国外网站
-DOMAIN-SUFFIX,akamaiedge.net,🌐 国外网站
-DOMAIN-SUFFIX,akamaitechnologies.com,🌐 国外网站
-DOMAIN-SUFFIX,edgekey.net,🌐 国外网站
-DOMAIN-SUFFIX,edgesuite.net,🌐 国外网站
-# CloudFront / Fastly
-DOMAIN-SUFFIX,cloudfront.net,🌐 国外网站
-DOMAIN-SUFFIX,fastly.net,🌐 国外网站
-DOMAIN-SUFFIX,fastlylb.net,🌐 国外网站
-# 其它 CDN
-DOMAIN-SUFFIX,kxcdn.com,🌐 国外网站
-DOMAIN-SUFFIX,stackpathdns.com,🌐 国外网站
-DOMAIN-SUFFIX,stackpathcdn.com,🌐 国外网站
-DOMAIN-SUFFIX,b-cdn.net,🌐 国外网站
-DOMAIN-SUFFIX,bunny.net,🌐 国外网站
-DOMAIN-SUFFIX,bunnycdn.com,🌐 国外网站
-DOMAIN-SUFFIX,cdn77.org,🌐 国外网站
-DOMAIN-SUFFIX,azureedge.net,🌐 国外网站
-DOMAIN-SUFFIX,azurefd.net,🌐 国外网站
-DOMAIN-SUFFIX,msecnd.net,🌐 国外网站
-# ⚠️ jsdelivr 走 GFW 组（原版 FIX#17-P0：消除 rule-provider 刷新时 DNS 循环依赖）
-# 中国：GFW 组选代理；印尼：GFW 组选 DIRECT
-DOMAIN-SUFFIX,jsdelivr.net,🚫 受限网站
-DOMAIN-SUFFIX,unpkg.com,🌐 国外网站
-# v5.2.10 FIX#39：cloudflare-dns.com 在境内被封，路由到 🚫 受限网站（同 dns.google）
-DOMAIN-SUFFIX,cloudflare-dns.com,🚫 受限网站
-DOMAIN-SUFFIX,r2.dev,🌐 国外网站
-DOMAIN-SUFFIX,ziffstatic.com,🌐 国外网站
-DOMAIN-SUFFIX,ucoz.ru,🌐 国外网站
-DOMAIN-SUFFIX,ucoz.net,🌐 国外网站
-# 证书服务 CA
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/DigiCert/DigiCert.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/GlobalSign/GlobalSign.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Sectigo/Sectigo.list,🌐 国外网站
-# 视频 CDN
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/BrightCove/BrightCove.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Jwplayer/Jwplayer.list,🌐 国外网站
-# Let's Encrypt
-DOMAIN-SUFFIX,letsencrypt.org,🌐 国外网站
-DOMAIN-SUFFIX,lencr.org,🌐 国外网站
-
-
-# ─── 阶段 22: 微软服务 ────────────────────────────────────────────────────────
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/OneDrive/OneDrive.list,Ⓜ️ 微软服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Microsoft/Microsoft.list,Ⓜ️ 微软服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/MicrosoftEdge/MicrosoftEdge.list,Ⓜ️ 微软服务
-
-
-# ─── 阶段 23: 苹果服务 ────────────────────────────────────────────────────────
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/AppleMusic/AppleMusic.list,🍎 苹果服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/iCloud/iCloud.list,🍎 苹果服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Apple/Apple.list,🍎 苹果服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/AppStore/AppStore.list,🍎 苹果服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/AppleTV/AppleTV.list,🍎 苹果服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/AppleNews/AppleNews.list,🍎 苹果服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/AppleDev/AppleDev.list,🍎 苹果服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/AppleProxy/AppleProxy.list,🍎 苹果服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Siri/Siri.list,🍎 苹果服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/TestFlight/TestFlight.list,🍎 苹果服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/AppleFirmware/AppleFirmware.list,🍎 苹果服务
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/FindMy/FindMy.list,🍎 苹果服务
-
-
-# ─── 阶段 24: 下载更新 ────────────────────────────────────────────────────────
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/SystemOTA/SystemOTA.list,📥 下载更新
-# Windows / Office 更新
-DOMAIN-SUFFIX,windowsupdate.com,📥 下载更新
-DOMAIN-SUFFIX,update.microsoft.com,📥 下载更新
-DOMAIN-SUFFIX,download.microsoft.com,📥 下载更新
-DOMAIN-SUFFIX,delivery.mp.microsoft.com,📥 下载更新
-DOMAIN-SUFFIX,dl.delivery.mp.microsoft.com,📥 下载更新
-DOMAIN-SUFFIX,officecdn.microsoft.com,📥 下载更新
-DOMAIN-SUFFIX,officecdn.microsoft.com.edgesuite.net,📥 下载更新
-# Firefox / Linux 镜像源
-DOMAIN-SUFFIX,download.mozilla.org,📥 下载更新
-DOMAIN-SUFFIX,archive.mozilla.org,📥 下载更新
-DOMAIN-SUFFIX,releases.ubuntu.com,📥 下载更新
-DOMAIN-SUFFIX,archive.ubuntu.com,📥 下载更新
-DOMAIN-SUFFIX,security.ubuntu.com,📥 下载更新
-DOMAIN-SUFFIX,mirrors.kernel.org,📥 下载更新
-DOMAIN-SUFFIX,dl.fedoraproject.org,📥 下载更新
-# Conda
-DOMAIN-SUFFIX,repo.anaconda.com,📥 下载更新
-DOMAIN-SUFFIX,conda.anaconda.org,📥 下载更新
-DOMAIN-SUFFIX,repo.continuum.io,📥 下载更新
-# 软件下载站
-DOMAIN-SUFFIX,sourceforge.net,📥 下载更新
-DOMAIN-SUFFIX,fosshub.com,📥 下载更新
-DOMAIN-SUFFIX,filehippo.com,📥 下载更新
-DOMAIN-SUFFIX,softonic.com,📥 下载更新
-# 容器镜像仓库
-DOMAIN-SUFFIX,gcr.io,📥 下载更新
-DOMAIN-SUFFIX,ghcr.io,📥 下载更新
-DOMAIN-SUFFIX,quay.io,📥 下载更新
-DOMAIN-SUFFIX,registry.k8s.io,📥 下载更新
-# bm7 下载规则集
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Download/Download.list,📥 下载更新
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Ubuntu/Ubuntu.list,📥 下载更新
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Mozilla/Mozilla.list,📥 下载更新
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Apkpure/Apkpure.list,📥 下载更新
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Android/Android.list,📥 下载更新
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Intel/Intel.list,📥 下载更新
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Nvidia/Nvidia.list,📥 下载更新
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Dell/Dell.list,📥 下载更新
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/HP/HP.list,📥 下载更新
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Canon/Canon.list,📥 下载更新
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/LG/LG.list,📥 下载更新
-
-
-# ─── 阶段 26: BT/PT Tracker ───────────────────────────────────────────────────
-DOMAIN-SUFFIX,tracker.opentrackr.org,🛰️ BT/PT Tracker
-DOMAIN-SUFFIX,open.stealth.si,🛰️ BT/PT Tracker
-DOMAIN-SUFFIX,tracker.torrent.eu.org,🛰️ BT/PT Tracker
-DOMAIN-SUFFIX,exodus.desync.com,🛰️ BT/PT Tracker
-DOMAIN-SUFFIX,tracker.openbittorrent.com,🛰️ BT/PT Tracker
-DOMAIN-SUFFIX,tracker.publicbt.com,🛰️ BT/PT Tracker
-DOMAIN-SUFFIX,tracker.dler.org,🛰️ BT/PT Tracker
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/PrivateTracker/PrivateTracker.list,🛰️ BT/PT Tracker
-
-
-# ─── 阶段 29: 🚫 受限网站（GFW 封锁域名兜底，置于 INTL_SITE 之前） ────────────
-# 语义：GFW = 确认被中国封锁 / INTL_SITE = 普通国外域名
-# 中国：GFW 组选代理；INTL_SITE 保持默认可探测直连
-# 印尼：GFW 组选 DIRECT，INTL_SITE 也选 DIRECT
-RULE-SET,https://fastly.jsdelivr.net/gh/szkane/ClashRuleSet@main/Clash/ProxyGFWlist.list,🚫 受限网站
-
-
-# ─── 阶段 19: 国外游戏 ────────────────────────────────────────────────────────
-# CLEAN#165: ubisoft.com, ubi.com, riotgames.com, leagueoflegends.com, valorant.com, rockstargames.com, gog.com, gogalaxy.com, supercell.com, garena.com, hoyoverse.com, hoyolab.com 已被同策略 RULE-SET 覆盖
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Steam/Steam.list,🎮 国外游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Epic/Epic.list,🎮 国外游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/PlayStation/PlayStation.list,🎮 国外游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Nintendo/Nintendo.list,🎮 国外游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Xbox/Xbox.list,🎮 国外游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/EA/EA.list,🎮 国外游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Blizzard/Blizzard.list,🎮 国外游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Game/Game.list,🎮 国外游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Rockstar/Rockstar.list,🎮 国外游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Riot/Riot.list,🎮 国外游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Gog/Gog.list,🎮 国外游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Supercell/Supercell.list,🎮 国外游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Garena/Garena.list,🎮 国外游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/HoYoverse/HoYoverse.list,🎮 国外游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/UBI/UBI.list,🎮 国外游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/WildRift/WildRift.list,🎮 国外游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Sony/Sony.list,🎮 国外游戏
-
-
-# ─── 阶段 27: 印尼本地服务（电商/出行/外卖/电信/政府/新闻 → 国外网站） ────────
-DOMAIN-SUFFIX,tokopedia.com,🌐 国外网站
-DOMAIN-SUFFIX,tokopedia.net,🌐 国外网站
-DOMAIN-SUFFIX,shopee.co.id,🌐 国外网站
-DOMAIN-SUFFIX,bukalapak.com,🌐 国外网站
-DOMAIN-SUFFIX,blibli.com,🌐 国外网站
-DOMAIN-SUFFIX,lazada.co.id,🌐 国外网站
-DOMAIN-SUFFIX,grab.com,🌐 国外网站
-DOMAIN-SUFFIX,gojek.com,🌐 国外网站
-DOMAIN-SUFFIX,gojek.co.id,🌐 国外网站
-DOMAIN-SUFFIX,traveloka.com,🌐 国外网站
-DOMAIN-SUFFIX,tiket.com,🌐 国外网站
-DOMAIN-SUFFIX,telkomsel.com,🌐 国外网站
-DOMAIN-SUFFIX,telkom.co.id,🌐 国外网站
-DOMAIN-SUFFIX,indosatooredoo.com,🌐 国外网站
-DOMAIN-SUFFIX,im3.co.id,🌐 国外网站
-DOMAIN-SUFFIX,xl.co.id,🌐 国外网站
-DOMAIN-SUFFIX,smartfren.com,🌐 国外网站
-DOMAIN-SUFFIX,tri.co.id,🌐 国外网站
-DOMAIN-SUFFIX,by.u.id,🌐 国外网站
-DOMAIN-SUFFIX,myrepublic.co.id,🌐 国外网站
-DOMAIN-SUFFIX,firstmedia.com,🌐 国外网站
-DOMAIN-SUFFIX,biznet.id,🌐 国外网站
-DOMAIN-SUFFIX,go.id,🌐 国外网站
-DOMAIN-SUFFIX,or.id,🌐 国外网站
-DOMAIN-SUFFIX,kompas.com,🌐 国外网站
-DOMAIN-SUFFIX,detik.com,🌐 国外网站
-DOMAIN-SUFFIX,tempo.co,🌐 国外网站
-DOMAIN-SUFFIX,cnnindonesia.com,🌐 国外网站
-DOMAIN-SUFFIX,cnbcindonesia.com,🌐 国外网站
-DOMAIN-SUFFIX,liputan6.com,🌐 国外网站
-DOMAIN-SUFFIX,tribunnews.com,🌐 国外网站
-DOMAIN-SUFFIX,kumparan.com,🌐 国外网站
-DOMAIN-SUFFIX,idntimes.com,🌐 国外网站
-DOMAIN-SUFFIX,gofood.co.id,🌐 国外网站
-DOMAIN-SUFFIX,grabfood.com,🌐 国外网站
-DOMAIN-SUFFIX,66tutup.com,🌐 国外网站
-# 印尼 IP 段归入国外网站
-GEOIP,ID,🌐 国外网站,no-resolve
-
-
-# ─── 阶段 30: 国外网站兜底 ────────────────────────────────────────────────────
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/CNN/CNN.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/NYTimes/NYTimes.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Bloomberg/Bloomberg.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/eBay/eBay.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Nike/Nike.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Adobe/Adobe.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Samsung/Samsung.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Tesla/Tesla.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Dropbox/Dropbox.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/MEGA/MEGA.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Wikipedia/Wikipedia.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Duolingo/Duolingo.list,🌐 国外网站
-# szkane Education
-RULE-SET,https://fastly.jsdelivr.net/gh/szkane/ClashRuleSet@main/Clash/Ruleset/Khan.list,🌐 国外网站
-RULE-SET,https://fastly.jsdelivr.net/gh/szkane/ClashRuleSet@main/Clash/Ruleset/Edutools.list,🌐 国外网站
-# Naver 宽域名兜底
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Naver/Naver.list,🌐 国外网站
-# EHGallery（非流媒体服务）
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/EHGallery/EHGallery.list,🌐 国外网站
-# 其它国外网站兜底
-DOMAIN-SUFFIX,archive.org,🌐 国外网站
-DOMAIN-SUFFIX,udemy.com,🌐 国外网站
-DOMAIN-SUFFIX,udemycdn.com,🌐 国外网站
-DOMAIN-SUFFIX,grammarly.com,🌐 国外网站
-DOMAIN-SUFFIX,grammarly.io,🌐 国外网站
-DOMAIN-SUFFIX,jetbrains.net,🌐 国外网站
-DOMAIN-SUFFIX,theguardian.com,🌐 国外网站
-DOMAIN-SUFFIX,guardianapis.com,🌐 国外网站
-DOMAIN-SUFFIX,box.com,🌐 国外网站
-DOMAIN-SUFFIX,boxcdn.net,🌐 国外网站
-DOMAIN-SUFFIX,noip.com,🌐 国外网站
-# Wayback Machine / Pornhub（替代已移除的 Accademia 国外网站 YAML）
-DOMAIN-SUFFIX,web.archive.org,🌐 国外网站
-DOMAIN-SUFFIX,pornhub.com,🌐 国外网站
-DOMAIN-SUFFIX,phncdn.com,🌐 国外网站
-DOMAIN-SUFFIX,phprcdn.com,🌐 国外网站
-
-
-# ─── 阶段 18: 国内游戏 ────────────────────────────────────────────────────────
-# 米哈游全家桶
-DOMAIN-SUFFIX,mihoyo.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,miyoushe.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,yuanshen.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,bhsr.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,zenlesszonezero.com,🕹️ 国内游戏
-# 网易游戏
-DOMAIN,game.163.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,gm.163.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,ds.163.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,nie.163.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,nie.netease.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,update.netease.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,netease.com,🕹️ 国内游戏
-# 腾讯 WeGame
-DOMAIN-SUFFIX,wegame.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,wegame.com.cn,🕹️ 国内游戏
-# 完美世界 / 心动 / 叠纸 / 鹰角 / 莉莉丝
-DOMAIN-SUFFIX,perfect-world.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,wanmei.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,xd.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,taptap.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,taptap.io,🕹️ 国内游戏
-DOMAIN-SUFFIX,papegames.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,hypergryph.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,gryphline.com,🕹️ 国内游戏
-DOMAIN-SUFFIX,lilith.com,🕹️ 国内游戏
-# bm7 国内游戏规则集
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/SteamCN/SteamCN.list,🕹️ 国内游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/WanMeiShiJie/WanMeiShiJie.list,🕹️ 国内游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/WanKaHuanJu/WanKaHuanJu.list,🕹️ 国内游戏
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Majsoul/Majsoul.list,🕹️ 国内游戏
-
-
-# ─── 阶段 11: 国内流媒体 ──────────────────────────────────────────────────────
-# 哔哩哔哩
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/BiliBili/BiliBili.list,📺 国内流媒体
-# 爱奇艺
-DOMAIN-SUFFIX,iqiyi.com,📺 国内流媒体
-DOMAIN-SUFFIX,iqiyipic.com,📺 国内流媒体
-DOMAIN-SUFFIX,71.am,📺 国内流媒体
-# 优酷
-DOMAIN-SUFFIX,youku.com,📺 国内流媒体
-DOMAIN-SUFFIX,ykimg.com,📺 国内流媒体
-DOMAIN-SUFFIX,soku.com,📺 国内流媒体
-# 腾讯视频
-DOMAIN-SUFFIX,v.qq.com,📺 国内流媒体
-DOMAIN-SUFFIX,video.qq.com,📺 国内流媒体
-DOMAIN-KEYWORD,tencentvideo,📺 国内流媒体
-# 芒果 TV / 湖南 TV
-DOMAIN-SUFFIX,mgtv.com,📺 国内流媒体
-DOMAIN-SUFFIX,hitv.com,📺 国内流媒体
-DOMAIN-SUFFIX,hunantv.com,📺 国内流媒体
-# 抖音 / 西瓜视频 / 字节系
-DOMAIN-SUFFIX,douyin.com,📺 国内流媒体
-DOMAIN-SUFFIX,douyinpic.com,📺 国内流媒体
-DOMAIN-SUFFIX,douyinvod.com,📺 国内流媒体
-DOMAIN-SUFFIX,ixigua.com,📺 国内流媒体
-DOMAIN-SUFFIX,pstatp.com,📺 国内流媒体
-DOMAIN-SUFFIX,snssdk.com,📺 国内流媒体
-# 搜狐
-DOMAIN-SUFFIX,sohu.com,📺 国内流媒体
-# 网易云音乐 / QQ 音乐 / 酷狗 / 酷我
-DOMAIN-SUFFIX,music.163.com,📺 国内流媒体
-DOMAIN-SUFFIX,ntes53.netease.com,📺 国内流媒体
-DOMAIN-SUFFIX,y.qq.com,📺 国内流媒体
-DOMAIN-SUFFIX,music.qq.com,📺 国内流媒体
-DOMAIN-SUFFIX,kugou.com,📺 国内流媒体
-DOMAIN-SUFFIX,kuwo.cn,📺 国内流媒体
-# 小红书 / 快手 / 微博
-DOMAIN-SUFFIX,xiaohongshu.com,📺 国内流媒体
-DOMAIN-SUFFIX,xhscdn.com,📺 国内流媒体
-DOMAIN-SUFFIX,kuaishou.com,📺 国内流媒体
-DOMAIN-SUFFIX,gifshow.com,📺 国内流媒体
-DOMAIN-SUFFIX,weibo.com,📺 国内流媒体
-DOMAIN-SUFFIX,weibo.cn,📺 国内流媒体
-DOMAIN-SUFFIX,sinaimg.cn,📺 国内流媒体
-# bm7 国内流媒体规则集（大规模集合）
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/iQIYI/iQIYI.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Youku/Youku.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/TencentVideo/TencentVideo.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/DouYin/DouYin.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/ByteDance/ByteDance.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/KuaiShou/KuaiShou.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Weibo/Weibo.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/XiaoHongShu/XiaoHongShu.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/NetEaseMusic/NetEaseMusic.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/KugouKuwo/KugouKuwo.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Sohu/Sohu.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/AcFun/AcFun.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Douyu/Douyu.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/HuYa/HuYa.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Himalaya/Himalaya.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/CCTV/CCTV.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/HunanTV/HunanTV.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/PPTV/PPTV.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Funshion/Funshion.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/LeTV/LeTV.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/TaiheMusic/TaiheMusic.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/KuKeMusic/KuKeMusic.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/HibyMusic/HibyMusic.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/MiWu/MiWu.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Migu/Migu.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/IPTVMainland/IPTVMainland.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/IPTVOther/IPTVOther.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/CIBN/CIBN.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/BesTV/BesTV.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/HuaShuTV/HuaShuTV.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/SMG/SMG.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/HWTV/HWTV.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/NivodTV/NivodTV.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Olevod/Olevod.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/DanDanZan/DanDanZan.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Dandanplay/Dandanplay.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/TianTianKanKan/TianTianKanKan.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/YiZhiBo/YiZhiBo.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/Ku6/Ku6.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/56/56.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/CETV/CETV.list,📺 国内流媒体
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/YYeTs/YYeTs.list,📺 国内流媒体
-# 港澳台 B 站需要港区代理解锁
-RULE-SET,https://fastly.jsdelivr.net/gh/szkane/ClashRuleSet@main/Clash/Ruleset/BilibiliHMT.list,🇭🇰 香港流媒体
-
-
-# ─── 阶段 28: 国内网站兜底 ────────────────────────────────────────────────────
-DOMAIN-SUFFIX,163.com,🏠 国内网站
-DOMAIN-SUFFIX,126.com,🏠 国内网站
-DOMAIN-SUFFIX,126.net,🏠 国内网站
-DOMAIN-SUFFIX,jianguoyun.com,🏠 国内网站
-# v5.4.19 #2 借鉴 Proxy-override：国内前端 CDN 直连前置（纯静态库托管）。
-DOMAIN-SUFFIX,baomitu.com,🏠 国内网站
-DOMAIN-SUFFIX,bootcss.com,🏠 国内网站
-DOMAIN-SUFFIX,staticfile.org,🏠 国内网站
-DOMAIN-SUFFIX,upaiyun.com,🏠 国内网站
-DOMAIN-SUFFIX,zhimg.com,🏠 国内网站
-DOMAIN-SUFFIX,alimama.com,🏠 国内网站
-DOMAIN-SUFFIX,zxtdjy.com,🏠 国内网站
-DOMAIN-SUFFIX,zhihu.co,🏠 国内网站
-# Chiphell 论坛直连（原版 FIX）
-DOMAIN-SUFFIX,chiphell.com,DIRECT
-DOMAIN-SUFFIX,iwipwedabay.com,DIRECT
-# bm7 国内综合（ChinaMax / cn 等）
-RULE-SET,https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Shadowrocket/ChinaMax/ChinaMax.list,🏠 国内网站
-DOMAIN-SUFFIX,bbys.app,DIRECT
-
-
-# ─── 阶段 31: GEOIP 精准标签路由 + CN 兜底 ────────────────────────────────────
-# 注：SR 原生 GEOIP 仅支持国家码匹配，不支持 cloudflare/telegram 等标签
-# 以下 GEOIP 标签依赖 Loyalsoldier 加强版 MMDB（在 SR 设置 → GeoLite2 数据库中替换）
-# 若未替换 MMDB，以下规则将失效，但规则集 RULE-SET 已覆盖等效分流，不影响功能
-# 推荐 MMDB 源：https://fastly.jsdelivr.net/gh/Loyalsoldier/geoip@release/Country.mmdb
-GEOIP,CN,🏠 国内网站,no-resolve
-
-
-FINAL,🐟 漏网之鱼,dns-failed
-[Host]
-# 系统 DNS 处理苹果服务（避免 CDN 失准）
-*.apple.com = server:system
-*.icloud.com = server:system
-localhost = 127.0.0.1
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  [URL Rewrite] — URL 重写
-# ══════════════════════════════════════════════════════════════════════════════
-
-[URL Rewrite]
-# Google 搜索防跳转
-^https?://(www\.)?g\.cn https://www.google.com 302
-^https?://(www\.)?google\.cn https://www.google.com 302
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  [MITM] — 中间人解密
-# ══════════════════════════════════════════════════════════════════════════════
-
-[MITM]
-# 默认不开启 MITM（量化交易场景不需要；如需脚本化，可在此添加 hostname）
-hostname = *.google.cn
-enable = false
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  配置结束 — 2026-04-25
-# ══════════════════════════════════════════════════════════════════════════════
+/**
+ * mihomo配置覆写脚本（全量版）
+ * 作者：AIsouler
+ * 源仓库：https://github.com/AIsouler/MyClash
+ * 脚本链接：https://raw.githubusercontent.com/AIsouler/MyClash/main/Script/mihomoScript.js
+ * 友情推荐，非常好用、省电且内存占用低的代理软件：https://github.com/appshubcc/Bettbox
+ */
+
+// --- 静态配置区域 ---
+
+// 适配 Bettbox 自定义配置参数
+const Compatible_With_Bettbox = { ruleOptionsEnable: true };
+
+/**
+ * 自定义配置选项
+ * true = 启用
+ * false = 禁用
+ */
+const ruleOptionsEnable = {
+  // 基础策略组
+  手动选择: true, // 是否启用手动选择策略组
+  自动选择: true, // 是否启用自动选择策略组
+  负载均衡: true, // 是否启用负载均衡策略组
+
+  // 以下为分流策略配置
+  FCM: true, // GoogleFCM服务
+  YouTube: true, // YouTube视频平台
+  Google: true, // Google服务
+  AI: true, // 国外AI服务
+  Microsoft: true, // Microsoft服务
+  Apple: true, // Apple服务
+  Telegram: true, // Telegram通讯软件
+  Steam: true, // Steam游戏平台
+  TikTok: true, // TikTok视频平台
+  Twitter: true, // Twitter社交平台
+  Meta: true, // Meta服务
+  Line: true, // Line通讯软件
+  Netflix: true, // Netflix视频平台
+  Emby: true, // Emby媒体服务
+  PikPak: true, // PikPak网盘服务
+  Spotify: true, // Spotify音乐服务
+  Crypto: true, // 加密货币相关服务
+  EHentai: true, // E-Hentai网站
+  AdBlock: true, // 广告拦截
+
+  // 以下为非分流策略配置
+  极简模式: false, // 是否启用极简模式
+  生成地区自动选择组: true, // 是否生成地区自动选择策略组
+  隐藏地区手动选择组: false, // 是否隐藏地区手动选择策略组
+  生成倍率组: true, // 是否生成低倍率/高倍率策略组
+  分流组添加所有节点: false, // 是否为分流策略组添加所有节点
+  过滤低倍率节点: false, // 是否过滤低倍率节点
+  过滤高倍率节点: false, // 是否过滤高倍率节点
+  过滤非地区节点: true, // 是否过滤非地区节点
+  屏蔽国外QUIC: true, // 是否屏蔽国外QUIC流量
+  代理IPV4优先: false, // 是否将订阅节点统一为 IPv4 优先（与“代理IPV6优先”同时开启时不生效）
+  代理IPV6优先: false, // 是否将订阅节点统一为 IPv6 优先（与“代理IPV4优先”同时开启时不生效）
+  链式代理: false, // 是否启用链式代理（自定义节点作为落地节点，经“链式中转”策略组中转）
+};
+
+// 定义前置规则
+const prefixRules = [
+  // 私有网络直连
+  'RULE-SET,private,直连',
+
+  // 国内直连
+  'RULE-SET,geolocation-cn,直连',
+  'RULE-SET,games_cn,直连', // 已包含 steam 下载域名
+  'RULE-SET,epicgames,直连',
+  'RULE-SET,nvidia_cn,直连',
+  'RULE-SET,apple_cn,直连',
+  'RULE-SET,microsoft_cn,直连',
+  'DOMAIN,fsend.cn,直连',
+  'DOMAIN,international-gfe.download.nvidia.com,直连',
+];
+
+// 此处添加自定义节点，填入下方[]内（可选，留空则不生成“自建节点”策略组）
+// 自定义节点不参与节点过滤与 hosts 改写；与订阅节点（标准化后）重名时自动添加“自建-”前缀
+// 示例：
+// const customizeProxies = [
+//   {
+//     name: '自建-日本-01',
+//     type: 'vmess',
+//     server: '5.6.7.8',
+//     port: 443,
+//     uuid: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+//     alterId: 0,
+//     cipher: 'auto',
+//     tls: true,
+//     servername: 'example.com',
+//     network: 'ws',
+//     'ws-opts': {
+//       path: '/path',
+//       headers: { Host: 'example.com' },
+//     },
+//   },
+// ];
+const customizeProxies = [];
+
+// 链式代理启用时，自定义节点的 dialer-proxy 引用目标
+const dialerProxyName = '链式中转';
+
+// 定义全局排除节点的正则表达式，用于排除非地区节点
+const excludeFilter =
+  /群|返利|循环|官网|客服|网站|网址|获取|订阅|流量|到期|机场|下次|版本|官址|备用|过期|已用|联系|邮箱|工单|贩卖|通知|倒卖|防止|国内|地址|频道|电报|无法|说明|使用|提示|访问|支持|教程|关注|更新|作者|加入|超时|收藏|优惠|福利|邀请|好友|失联|选择|剩余|公益|发布|DIZTNA|通路|登录|禁止|定时|渠道|牢记|永久|余额|阁下|本站|刷新|导航|建议|重置|以下|过滤|⚠️|@|t\.me\/\+|\bexpire\b|\bhttps?:\/\/|\.com|\btraffic\b/iu;
+
+// 屏蔽国外QUIC
+const blockForeignQuic = [
+  'AND,((NETWORK,UDP),(DST-PORT,443),(NOT,((OR,((RULE-SET,cn_additional),(RULE-SET,cn_ip,no-resolve)))))),REJECT',
+];
+
+// 直连节点
+const directProxies = [
+  {
+    name: '🇨🇳 直连 | 双栈',
+    type: 'direct',
+  },
+  {
+    name: '🇨🇳 直连 | IPv4优先',
+    type: 'direct',
+    'ip-version': 'ipv4-prefer',
+  },
+  {
+    name: '🇨🇳 直连 | IPv6优先',
+    type: 'direct',
+    'ip-version': 'ipv6-prefer',
+  },
+  {
+    name: '🇨🇳 直连 | 仅IPv4',
+    type: 'direct',
+    'ip-version': 'ipv4',
+  },
+  {
+    name: '🇨🇳 直连 | 仅IPv6',
+    type: 'direct',
+    'ip-version': 'ipv6',
+  },
+];
+
+// 定义地区策略组
+const regionDefinitions = [
+  {
+    name: '香港',
+    flag: '🇭🇰',
+    regex: /🇭🇰|香港|(?<![A-Za-z])HKG?(?![A-Za-z])|hong\s*kong/i,
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Hong_Kong.png',
+  },
+  {
+    name: '日本',
+    flag: '🇯🇵',
+    regex: /🇯🇵|日本|东京|大阪|京都|(?<![A-Za-z])JPN?(?![A-Za-z])|japan/i,
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Japan.png',
+  },
+  {
+    name: '美国',
+    flag: '🇺🇸',
+    regex:
+      /🇺🇸|美国|纽约|洛杉矶|旧金山|芝加哥|休斯顿|迈阿密|西雅图|波士顿|华盛顿|拉斯维加斯|圣何塞|圣地亚哥|(?<![A-Za-z])USA?(?![A-Za-z])|america|united\s*states/i,
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/United_States.png',
+  },
+  {
+    name: '新加坡',
+    flag: '🇸🇬',
+    regex: /🇸🇬|新加坡|狮城|(?<![A-Za-z])SGP?(?![A-Za-z])|singapore/i,
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Singapore.png',
+  },
+  {
+    name: '台湾省',
+    flag: '🇹🇼',
+    regex: /🇹🇼|台湾|台北|高雄|(?<![A-Za-z])TWN?(?![A-Za-z])|taiwan/i,
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Taiwan.png',
+  },
+];
+
+// 定义倍率策略组
+const lowRateRegionName = '低倍率节点';
+const highRateRegionName = '高倍率节点';
+
+const rateRegionDefinitions = [
+  {
+    name: lowRateRegionName,
+    regex:
+      /^(?!.*(?:剩|期)).*(?:(?<!\d)0\.[0-5]|(?<=[ \[\(|｜丨∣┃\-‐–—−－﹣])0[*×✕✖⨯⨉x倍])|(?:(?<=[ \[\(|｜丨∣┃\-‐–—−－﹣])[*×✕✖⨯⨉x]0(?=[ \)\]]|倍|$))|^(?!.*(?:客户端|软件)).*下载|低倍|免费|(?<![A-Za-z])free(?![A-Za-z])/i,
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Available_1.png',
+  },
+  {
+    name: highRateRegionName,
+    regex:
+      /(?<=[ \[\(|｜丨∣┃\-‐–—−－﹣])((?:[*×✕✖⨯⨉x]\s*(?:[2-9]\d*|[1-9]\d+)(?:\.\d+)?)|(?:(?<![\d.])(?:[2-9]\d*|[1-9]\d+)(?:\.\d+)?\s*(?:倍|[*×✕✖⨯⨉x])))/i,
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Airport.png',
+  },
+];
+
+// 全部策略组定义（地区 + 倍率），统一用于节点匹配与归类
+const allRegionDefinitions = [...regionDefinitions, ...rateRegionDefinitions];
+
+// Rule Providers 通用配置
+const ruleProviderCommonDomain = {
+  type: 'http',
+  format: 'mrs',
+  interval: 86400,
+  behavior: 'domain',
+};
+const ruleProviderCommonIpcidr = {
+  type: 'http',
+  format: 'mrs',
+  interval: 86400,
+  behavior: 'ipcidr',
+};
+
+// 定义基础 Rule Providers
+const baseRuleProviders = {
+  // --- 直连规则集 ---
+
+  private: {
+    ...ruleProviderCommonDomain,
+    url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/private.mrs',
+    path: './ruleset/private.mrs',
+    'path-in-bundle': 'geo/geosite/private.mrs',
+  },
+  private_ip: {
+    ...ruleProviderCommonIpcidr,
+    url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geoip/private.mrs',
+    path: './ruleset/private_ip.mrs',
+    'path-in-bundle': 'geo/geoip/private.mrs',
+  },
+  games_cn: {
+    ...ruleProviderCommonDomain,
+    url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/category-games@cn.mrs',
+    path: './ruleset/category-games@cn.mrs',
+    'path-in-bundle': 'geo/geosite/category-games@cn.mrs',
+  },
+  epicgames: {
+    ...ruleProviderCommonDomain,
+    url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/epicgames.mrs',
+    path: './ruleset/epicgames.mrs',
+    'path-in-bundle': 'geo/geosite/epicgames.mrs',
+  },
+  nvidia_cn: {
+    ...ruleProviderCommonDomain,
+    url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/nvidia@cn.mrs',
+    path: './ruleset/nvidia@cn.mrs',
+    'path-in-bundle': 'geo/geosite/nvidia@cn.mrs',
+  },
+  apple_cn: {
+    ...ruleProviderCommonDomain,
+    url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/apple@cn.mrs',
+    path: './ruleset/apple@cn.mrs',
+    'path-in-bundle': 'geo/geosite/apple@cn.mrs',
+  },
+  microsoft_cn: {
+    ...ruleProviderCommonDomain,
+    url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/microsoft@cn.mrs',
+    path: './ruleset/microsoft@cn.mrs',
+    'path-in-bundle': 'geo/geosite/microsoft@cn.mrs',
+  },
+  'geolocation-cn': {
+    ...ruleProviderCommonDomain,
+    url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/geolocation-cn.mrs',
+    path: './ruleset/geolocation-cn.mrs',
+    'path-in-bundle': 'geo/geosite/geolocation-cn.mrs',
+  },
+  cn_ip: {
+    ...ruleProviderCommonIpcidr,
+    url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geoip/cn.mrs',
+    path: './ruleset/cn_ip.mrs',
+    'path-in-bundle': 'geo/geoip/cn.mrs',
+  },
+
+  // --- 代理规则集 ---
+
+  'geolocation-!cn': {
+    ...ruleProviderCommonDomain,
+    url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/geolocation-!cn.mrs',
+    path: './ruleset/geolocation-!cn.mrs',
+    'path-in-bundle': 'geo/geosite/geolocation-!cn.mrs',
+  },
+
+  // --- 其他规则集 ---
+
+  fakeip_filter: {
+    ...ruleProviderCommonDomain,
+    url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/fakeip-filter.mrs',
+    path: './ruleset/fakeip-filter.mrs',
+    'path-in-bundle': 'geo/geosite/fakeip-filter.mrs',
+  },
+  cn_additional: {
+    ...ruleProviderCommonDomain,
+    url: 'https://static-file-global.353355.xyz/rules/cn-additional-list.mrs',
+    path: './ruleset/cn-additional-list.mrs',
+    'path-in-bundle': 'geo/geosite/cn.mrs',
+  },
+  cn: {
+    ...ruleProviderCommonDomain,
+    url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/cn.mrs',
+    path: './ruleset/cn.mrs',
+    'path-in-bundle': 'geo/geosite/cn.mrs',
+  },
+};
+
+// 策略组公共配置
+const groupBaseOption = {
+  interval: 600,
+  timeout: 3000,
+  url: 'https://www.apple.com/library/test/success.html',
+  lazy: true,
+  'max-failed-times': 3,
+  'empty-fallback': 'REJECT',
+};
+
+// select策略组通用配置
+const selectBaseOption = {
+  ...groupBaseOption,
+  type: 'select',
+};
+
+// url-test策略组通用配置
+const urlTestBaseOption = {
+  ...groupBaseOption,
+  type: 'url-test',
+  tolerance: 50,
+  'exclude-type': 'DIRECT',
+  icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Auto.png',
+  hidden: true,
+};
+
+// load-balance策略组通用配置
+const loadBalanceBaseOption = {
+  ...groupBaseOption,
+  type: 'load-balance',
+  strategy: 'sticky-sessions',
+  'exclude-type': 'DIRECT',
+  icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Round_Robin.png',
+  hidden: true,
+};
+
+// 定义基础策略组
+const baseGroups = [
+  {
+    name: '手动选择',
+    baseOption: selectBaseOption,
+    includeAll: true,
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Static.png',
+  },
+  {
+    name: '自动选择',
+    baseOption: urlTestBaseOption,
+    includeAll: true,
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Auto.png',
+  },
+  {
+    name: '负载均衡',
+    baseOption: loadBalanceBaseOption,
+    includeAll: true,
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Round_Robin.png',
+  },
+];
+
+// 定义分流策略组配置
+const serviceConfigs = [
+  ...baseGroups,
+  {
+    name: 'FCM',
+    baseOption: selectBaseOption,
+    direct: true,
+    defaultSelected: '直连',
+    providers: {
+      googlefcm: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/googlefcm.mrs',
+        path: './ruleset/googlefcm.mrs',
+        'path-in-bundle': 'geo/geosite/googlefcm.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/MiToverG422/Qure@master/IconSet/Color/fcm.png',
+    rules: ['RULE-SET,googlefcm,FCM'],
+  },
+  {
+    name: 'YouTube',
+    baseOption: selectBaseOption,
+    providers: {
+      youtube: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/youtube.mrs',
+        path: './ruleset/youtube.mrs',
+        'path-in-bundle': 'geo/geosite/youtube.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/YouTube.png',
+    rules: ['RULE-SET,youtube,YouTube'],
+  },
+  {
+    name: 'Google',
+    baseOption: selectBaseOption,
+    providers: {
+      google: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/google.mrs',
+        path: './ruleset/google.mrs',
+        'path-in-bundle': 'geo/geosite/google.mrs',
+      },
+      google_ip: {
+        ...ruleProviderCommonIpcidr,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geoip/google.mrs',
+        path: './ruleset/google_ip.mrs',
+        'path-in-bundle': 'geo/geoip/google.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Google_Search.png',
+    rules: ['RULE-SET,google,Google', 'RULE-SET,google_ip,Google,no-resolve'],
+  },
+  {
+    name: 'AI',
+    baseOption: selectBaseOption,
+    defaultSelected: '美国',
+    providers: {
+      ai: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/category-ai-!cn.mrs',
+        path: './ruleset/ai.mrs',
+        'path-in-bundle': 'geo/geosite/category-ai-!cn.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/ChatGPT.png',
+    rules: ['RULE-SET,ai,AI'],
+  },
+  {
+    name: 'Microsoft',
+    baseOption: selectBaseOption,
+    direct: true,
+    providers: {
+      github: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/github.mrs',
+        path: './ruleset/github.mrs',
+        'path-in-bundle': 'geo/geosite/github.mrs',
+      },
+      microsoft: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/microsoft.mrs',
+        path: './ruleset/microsoft.mrs',
+        'path-in-bundle': 'geo/geosite/microsoft.mrs',
+      },
+      microsoft_ip: {
+        ...ruleProviderCommonIpcidr,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geoip/microsoft.mrs',
+        path: './ruleset/microsoft_ip.mrs',
+        'path-in-bundle': 'geo/geoip/microsoft.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Microsoft.png',
+    rules: ['RULE-SET,github,默认代理', 'RULE-SET,microsoft,Microsoft', 'RULE-SET,microsoft_ip,Microsoft,no-resolve'],
+  },
+  {
+    name: 'Apple',
+    baseOption: selectBaseOption,
+    direct: true,
+    providers: {
+      apple: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/apple.mrs',
+        path: './ruleset/apple.mrs',
+        'path-in-bundle': 'geo/geosite/apple.mrs',
+      },
+      apple_ip: {
+        ...ruleProviderCommonIpcidr,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geoip/apple.mrs',
+        path: './ruleset/apple_ip.mrs',
+        'path-in-bundle': 'geo/geoip/apple.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Apple.png',
+    rules: ['RULE-SET,apple,Apple', 'RULE-SET,apple_ip,Apple,no-resolve'],
+  },
+  {
+    name: 'Telegram',
+    baseOption: selectBaseOption,
+    providers: {
+      telegram: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/telegram.mrs',
+        path: './ruleset/telegram.mrs',
+        'path-in-bundle': 'geo/geosite/telegram.mrs',
+      },
+      telegram_ip: {
+        ...ruleProviderCommonIpcidr,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geoip/telegram.mrs',
+        path: './ruleset/telegram_ip.mrs',
+        'path-in-bundle': 'geo/geoip/telegram.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Telegram.png',
+    rules: ['RULE-SET,telegram,Telegram', 'RULE-SET,telegram_ip,Telegram,no-resolve'],
+  },
+  {
+    name: 'Steam',
+    baseOption: selectBaseOption,
+    direct: true,
+    providers: {
+      steam: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/steam.mrs',
+        path: './ruleset/steam.mrs',
+        'path-in-bundle': 'geo/geosite/steam.mrs',
+      },
+      steam_ip: {
+        ...ruleProviderCommonIpcidr,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geoip/steam.mrs',
+        path: './ruleset/steam_ip.mrs',
+        'path-in-bundle': 'geo/geoip/steam.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Steam.png',
+    rules: ['RULE-SET,steam,Steam', 'RULE-SET,steam_ip,Steam,no-resolve'],
+  },
+  {
+    name: 'TikTok',
+    baseOption: selectBaseOption,
+    defaultSelected: '日本',
+    providers: {
+      tiktok: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/tiktok.mrs',
+        path: './ruleset/tiktok.mrs',
+        'path-in-bundle': 'geo/geosite/tiktok.mrs',
+      },
+      tiktok_ip: {
+        ...ruleProviderCommonIpcidr,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geoip/tiktok.mrs',
+        path: './ruleset/tiktok_ip.mrs',
+        'path-in-bundle': 'geo/geoip/tiktok.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/TikTok.png',
+    rules: ['RULE-SET,tiktok,TikTok', 'RULE-SET,tiktok_ip,TikTok,no-resolve'],
+  },
+  {
+    name: 'Twitter',
+    baseOption: selectBaseOption,
+    providers: {
+      twitter: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/twitter.mrs',
+        path: './ruleset/twitter.mrs',
+        'path-in-bundle': 'geo/geosite/twitter.mrs',
+      },
+      twitter_ip: {
+        ...ruleProviderCommonIpcidr,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geoip/twitter.mrs',
+        path: './ruleset/twitter_ip.mrs',
+        'path-in-bundle': 'geo/geoip/twitter.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Twitter.png',
+    rules: ['RULE-SET,twitter,Twitter', 'RULE-SET,twitter_ip,Twitter,no-resolve'],
+  },
+  {
+    name: 'Meta',
+    baseOption: selectBaseOption,
+    providers: {
+      meta: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/meta.mrs',
+        path: './ruleset/meta.mrs',
+        'path-in-bundle': 'geo/geosite/meta.mrs',
+      },
+      facebook_ip: {
+        ...ruleProviderCommonIpcidr,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geoip/facebook.mrs',
+        path: './ruleset/facebook_ip.mrs',
+        'path-in-bundle': 'geo/geoip/facebook.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/lige47/QuanX-icon-rule@main/icon/04ProxySoft/meta.png',
+    rules: ['RULE-SET,meta,Meta', 'RULE-SET,facebook_ip,Meta,no-resolve'],
+  },
+  {
+    name: 'Line',
+    baseOption: selectBaseOption,
+    providers: {
+      line: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/line.mrs',
+        path: './ruleset/line.mrs',
+        'path-in-bundle': 'geo/geosite/line.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Line.png',
+    rules: ['RULE-SET,line,Line'],
+  },
+  {
+    name: 'Netflix',
+    baseOption: selectBaseOption,
+    providers: {
+      netflix: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/netflix.mrs',
+        path: './ruleset/netflix.mrs',
+        'path-in-bundle': 'geo/geosite/netflix.mrs',
+      },
+      netflix_ip: {
+        ...ruleProviderCommonIpcidr,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geoip/netflix.mrs',
+        path: './ruleset/netflix_ip.mrs',
+        'path-in-bundle': 'geo/geoip/netflix.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Netflix.png',
+    rules: ['RULE-SET,netflix,Netflix', 'RULE-SET,netflix_ip,Netflix,no-resolve'],
+  },
+  {
+    name: 'Emby',
+    baseOption: selectBaseOption,
+    direct: true,
+    providers: {
+      emby: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/666OS/rules@release/mihomo/domain/Emby.mrs',
+        path: './ruleset/emby.mrs',
+        'path-in-bundle': 'geo/geosite/category-emby.mrs',
+      },
+      emos: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/binaryu/emos-proxy-rule@main/rules/emos-mihomo.mrs',
+        path: './ruleset/emos.mrs',
+        'path-in-bundle': 'geo/geosite/category-emby.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Emby.png',
+    rules: [
+      'RULE-SET,emby,Emby',
+      'RULE-SET,emos,Emby',
+      'DOMAIN-SUFFIX,mb3admin.com,Emby',
+      'DOMAIN-SUFFIX,nubebelle.com,Emby',
+      'DOMAIN-KEYWORD,emby,Emby',
+      'PROCESS-NAME,com.mb.android,Emby',
+      'PROCESS-NAME,tv.emby.embyatv,Emby',
+      'PROCESS-NAME,com.hush.yamby,Emby',
+      'PROCESS-NAME,com.jellycine.app,Emby',
+      'PROCESS-NAME,com.mountains.hills,Emby',
+      'PROCESS-NAME,RodelPlayer.App.exe,Emby',
+      'PROCESS-NAME,com.feifeiduck.capyplayer,Emby',
+    ],
+  },
+  {
+    name: 'PikPak',
+    baseOption: selectBaseOption,
+    direct: true,
+    providers: {
+      pikpak: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/pikpak.mrs',
+        path: './ruleset/pikpak.mrs',
+        'path-in-bundle': 'geo/geosite/pikpak.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/lige47/QuanX-icon-rule@main/icon/03CNSoft/pikpak.png',
+    rules: ['RULE-SET,pikpak,PikPak'],
+  },
+  {
+    name: 'Spotify',
+    baseOption: selectBaseOption,
+    direct: true,
+    providers: {
+      spotify: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/spotify.mrs',
+        path: './ruleset/spotify.mrs',
+        'path-in-bundle': 'geo/geosite/spotify.mrs',
+      },
+      spotify_ip: {
+        ...ruleProviderCommonIpcidr,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geoip/spotify.mrs',
+        path: './ruleset/spotify_ip.mrs',
+        'path-in-bundle': 'geo/geoip/spotify.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Spotify.png',
+    rules: ['RULE-SET,spotify,Spotify', 'RULE-SET,spotify_ip,Spotify,no-resolve'],
+  },
+  {
+    name: 'Crypto',
+    baseOption: selectBaseOption,
+    defaultSelected: '日本',
+    providers: {
+      cryptocurrency: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/category-cryptocurrency.mrs',
+        path: './ruleset/cryptocurrency.mrs',
+        'path-in-bundle': 'geo/geosite/category-cryptocurrency.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/lige47/QuanX-icon-rule@main/icon/04ProxySoft/Bitcoin.png',
+    rules: ['RULE-SET,cryptocurrency,Crypto'],
+  },
+  {
+    name: 'EHentai',
+    baseOption: selectBaseOption,
+    direct: true,
+    defaultSelected: '美国',
+    providers: {
+      ehentai: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/appshubcc/bett-rules@meta/geo/geosite/ehentai.mrs',
+        path: './ruleset/ehentai.mrs',
+        'path-in-bundle': 'geo/geosite/ehentai.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/lige47/QuanX-icon-rule@main/icon/04ProxySoft/exhentai.png',
+    rules: ['RULE-SET,ehentai,EHentai'],
+  },
+  {
+    name: 'AdBlock',
+    baseOption: selectBaseOption,
+    reject: true,
+    providers: {
+      adblockmihomolite: {
+        ...ruleProviderCommonDomain,
+        url: 'https://fastly.jsdelivr.net/gh/217heidai/adblockfilters@main/rules/adblockmihomolite.mrs',
+        path: './ruleset/adblockmihomolite.mrs',
+        'path-in-bundle': 'geo/geosite/category-ads-all.mrs',
+      },
+    },
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Advertising.png',
+    rules: ['RULE-SET,adblockmihomolite,AdBlock'],
+  },
+];
+
+// ---节点过滤、重命名及验证---
+
+/**
+ * 节点匹配缓存，避免重复执行正则
+ */
+const regionMatchCache = new Map();
+function getMatchedRegions(proxyName) {
+  if (regionMatchCache.has(proxyName)) {
+    return regionMatchCache.get(proxyName);
+  }
+
+  const regions = allRegionDefinitions.filter((region) => region.regex.test(proxyName));
+  regionMatchCache.set(proxyName, regions);
+
+  return regions;
+}
+
+/**
+ * 标准化节点名称：补全地区国旗、折叠多余空格，并预缓存匹配结果
+ */
+const flagRegex = /[\u{1F1E6}-\u{1F1FF}]{2}/u;
+function normalizeProxyName(proxy) {
+  const originalName = proxy.name;
+
+  const flag = originalName.match(flagRegex)?.[0];
+
+  const nameWithoutFlag = (flag ? originalName.replace(flag, '') : originalName).replace(/\s+/g, ' ').trim();
+
+  const matchedRegions = getMatchedRegions(originalName);
+
+  const regionFlag = flag || matchedRegions.find((region) => region.flag)?.flag;
+
+  const normalizedName = regionFlag ? `${regionFlag} ${nameWithoutFlag}` : nameWithoutFlag;
+
+  if (normalizedName !== originalName) {
+    regionMatchCache.set(normalizedName, matchedRegions);
+  }
+
+  return normalizedName === originalName ? proxy : { ...proxy, name: normalizedName };
+}
+
+/**
+ * 修复 dialer-proxy 引用：目标被重命名则更新，被移除或不存在则删除引用
+ */
+function fixDialerProxy(proxy, renameMap, normalizedProxyNames) {
+  const target = proxy['dialer-proxy'];
+  if (!target) return proxy;
+
+  if (renameMap.has(target)) {
+    return { ...proxy, 'dialer-proxy': renameMap.get(target) };
+  }
+
+  if (normalizedProxyNames.has(target)) {
+    return proxy;
+  }
+
+  const copy = { ...proxy };
+  delete copy['dialer-proxy'];
+  return copy;
+}
+
+/**
+ * 读取代理 IP 版本偏好：仅其中一个开关开启时返回对应偏好，
+ * 同时开启或同时关闭时返回 null（不应用任何偏好，节点保持原样）
+ */
+function getIpVersionPreference() {
+  const ipv4PreferEnabled = ruleOptionsEnable.代理IPV4优先;
+  const ipv6PreferEnabled = ruleOptionsEnable.代理IPV6优先;
+
+  if (ipv4PreferEnabled && !ipv6PreferEnabled) return 'ipv4-prefer';
+  if (ipv6PreferEnabled && !ipv4PreferEnabled) return 'ipv6-prefer';
+  return null;
+}
+
+/**
+ * 过滤并标准化节点：剔除内置/信息节点、按配置过滤、去重、修复 dialer-proxy 引用，空列表时抛错
+ */
+function filterAndNormalizeProxies(config) {
+  regionMatchCache.clear();
+
+  const filterLowRateProxiesEnabled = ruleOptionsEnable.过滤低倍率节点;
+  const filterHighRateProxiesEnabled = ruleOptionsEnable.过滤高倍率节点;
+  const filterNonRegionProxiesEnabled = ruleOptionsEnable.过滤非地区节点;
+
+  const lowRateRegex = filterLowRateProxiesEnabled
+    ? rateRegionDefinitions.find((r) => r.name === lowRateRegionName)?.regex
+    : null;
+  const highRateRegex = filterHighRateProxiesEnabled
+    ? rateRegionDefinitions.find((r) => r.name === highRateRegionName)?.regex
+    : null;
+
+  const originalProxies = config.proxies || [];
+
+  const filteredRawProxies = originalProxies.filter((proxy) => {
+    const type = String(proxy.type ?? '').toLowerCase();
+    if (type === 'direct' || type === 'reject' || type === 'rematch') return false;
+
+    if (lowRateRegex?.test(proxy.name) || highRateRegex?.test(proxy.name)) return false;
+
+    if (!filterNonRegionProxiesEnabled) return true;
+
+    const isRegionProxy = getMatchedRegions(proxy.name).some((region) => regionDefinitions.includes(region));
+
+    return isRegionProxy || !excludeFilter.test(proxy.name);
+  });
+
+  const renameMap = new Map();
+  const normalizedProxies = [];
+  const uniqueNames = new Set();
+
+  for (const rawProxy of filteredRawProxies) {
+    const normalized = normalizeProxyName(rawProxy);
+    if (normalized.name !== rawProxy.name) {
+      renameMap.set(rawProxy.name, normalized.name);
+    }
+    if (!uniqueNames.has(normalized.name)) {
+      uniqueNames.add(normalized.name);
+      normalizedProxies.push(normalized);
+    }
+  }
+
+  const normalizedProxyNames = new Set(normalizedProxies.map((p) => p.name));
+
+  const filteredProxies = normalizedProxies.map((proxy) => fixDialerProxy(proxy, renameMap, normalizedProxyNames));
+
+  if (!filteredProxies.length) {
+    throw new Error('配置文件中未找到任何代理节点，请使用机场提供的配置文件进行覆写');
+  }
+
+  const ipVersionPreference = getIpVersionPreference();
+  if (ipVersionPreference) {
+    return filteredProxies.map((proxy) =>
+      proxy['ip-version'] === ipVersionPreference ? proxy : { ...proxy, 'ip-version': ipVersionPreference },
+    );
+  }
+
+  return filteredProxies;
+}
+
+// ---构建地区组和倍率组---
+
+/**
+ * 构建地区策略组，可附带自动选择组
+ */
+function createRegionGroup(name, icon, proxies) {
+  const generateRegionAutoSelectEnabled = ruleOptionsEnable.生成地区自动选择组;
+  const hideManualSelectGroupEnabled = ruleOptionsEnable.隐藏地区手动选择组;
+
+  if (generateRegionAutoSelectEnabled) {
+    const urlTestName = `${name}-自动选择`;
+    return [
+      {
+        ...urlTestBaseOption,
+        name: urlTestName,
+        proxies,
+      },
+      {
+        ...selectBaseOption,
+        name,
+        icon,
+        proxies: [...proxies, urlTestName],
+        hidden: hideManualSelectGroupEnabled,
+      },
+    ];
+  }
+  return [
+    {
+      ...selectBaseOption,
+      name,
+      icon,
+      proxies,
+      hidden: hideManualSelectGroupEnabled,
+    },
+  ];
+}
+
+/**
+ * 将节点按地区/倍率归类，构建地区策略组、倍率策略组与“其他节点”组
+ */
+function buildRegionGroups(filteredProxies, customProxies) {
+  const generateRateGroupEnabled = ruleOptionsEnable.生成倍率组;
+
+  const regionGroups = Object.fromEntries(allRegionDefinitions.map(({ name }) => [name, []]));
+  const otherProxies = [];
+
+  for (const proxy of [...filteredProxies, ...customProxies]) {
+    const matchedRegions = getMatchedRegions(proxy.name);
+    const isRegionProxy = matchedRegions.some((region) => regionDefinitions.includes(region));
+
+    for (const region of matchedRegions) {
+      regionGroups[region.name].push(proxy.name);
+    }
+
+    if (!isRegionProxy) {
+      otherProxies.push(proxy.name);
+    }
+  }
+
+  const generatedRegionGroups = allRegionDefinitions
+    .filter((r) => regionGroups[r.name].length > 0 && (generateRateGroupEnabled || !rateRegionDefinitions.includes(r)))
+    .flatMap((r) => createRegionGroup(r.name, r.icon, regionGroups[r.name]));
+
+  if (otherProxies.length > 0) {
+    generatedRegionGroups.push(
+      ...createRegionGroup(
+        '其他节点',
+        'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/World_Map.png',
+        otherProxies,
+      ),
+    );
+  }
+
+  return generatedRegionGroups;
+}
+
+// ---构建自定义节点组---
+
+/**
+ * 处理自定义节点：标准化名称、与订阅节点重名时添加“自建-”前缀、内部去重，
+ * 并构建“自建节点”策略组。
+ * 自定义节点不参与订阅节点过滤，也不参与 hosts 改写及 DNS 域名处理。
+ */
+function buildCustomizeGroups(filteredProxies, customizeList = customizeProxies) {
+  const chainEnabled = ruleOptionsEnable.链式代理;
+
+  if (!customizeList.length) {
+    if (chainEnabled) {
+      throw new Error('启用失败，请在脚本中添加自定义节点后尝试');
+    }
+    return { customProxies: [], customProxyNames: [], customGroup: null };
+  }
+
+  const usedNames = new Set(filteredProxies.map((p) => p.name));
+  const customPrefix = '自建-';
+  const customProxies = [];
+
+  for (const proxy of customizeList) {
+    const normalized = normalizeProxyName(proxy);
+    let name = normalized.name;
+    while (usedNames.has(name)) {
+      name = normalizeProxyName({ name: `${customPrefix}${name}` }).name.replace(`${customPrefix} `, customPrefix);
+    }
+    usedNames.add(name);
+
+    let customProxy = name === normalized.name ? normalized : { ...normalized, name };
+    if (chainEnabled && customProxy['dialer-proxy'] !== dialerProxyName) {
+      customProxy = { ...customProxy, 'dialer-proxy': dialerProxyName };
+    }
+    customProxies.push(customProxy);
+  }
+
+  const customProxyNames = customProxies.map((p) => p.name);
+
+  const customGroup = {
+    ...selectBaseOption,
+    name: chainEnabled ? '链式落地' : '自建节点',
+    proxies: customProxyNames,
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Server.png',
+  };
+
+  return {
+    customProxies,
+    customProxyNames,
+    customGroup,
+  };
+}
+
+// ---构建基础策略组和分流策略组---
+
+/**
+ * 构建基础/分流策略组/部分节点组、GLOBAL 组与规则集，并汇总分流规则
+ */
+function buildFunctionalGroups(filteredProxies, generatedRegionGroups, customizeInfo) {
+  const minimalModeEnabled = ruleOptionsEnable.极简模式;
+  const blockForeignQuicEnabled = ruleOptionsEnable.屏蔽国外QUIC;
+  const addAllNodesToServiceGroupsEnabled = ruleOptionsEnable.分流组添加所有节点;
+  const chainEnabled = ruleOptionsEnable.链式代理;
+  const hideManualSelectGroupEnabled = ruleOptionsEnable.隐藏地区手动选择组;
+
+  const functionalGroups = [];
+  const functionalRules = [];
+  const finalRuleProviders = { ...baseRuleProviders };
+
+  if (!blockForeignQuicEnabled) {
+    delete finalRuleProviders.cn_additional;
+  }
+
+  const { customProxyNames = [], customGroup = null } = customizeInfo || {};
+  const filteredProxyNames = filteredProxies.map((p) => p.name);
+  const allProxiesNames = [...customProxyNames, ...filteredProxyNames];
+  const groupNamesOfSelect = generatedRegionGroups.filter((g) => g.type === 'select').map((g) => g.name);
+  const baseGroupNames = baseGroups.filter((g) => ruleOptionsEnable[g.name]).map((g) => g.name);
+  const customGroupNames = customGroup ? [customGroup.name] : [];
+
+  const chainGroup =
+    chainEnabled && customGroup
+      ? {
+          ...selectBaseOption,
+          name: dialerProxyName,
+          proxies: filteredProxyNames,
+          icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Bypass.png',
+        }
+      : null;
+
+  if (minimalModeEnabled) {
+    const defaultGroup = {
+      ...selectBaseOption,
+      name: '默认代理',
+      proxies: allProxiesNames,
+      icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Proxy.png',
+    };
+    const finalRuleProviders = { ...baseRuleProviders };
+    if (!blockForeignQuicEnabled) delete finalRuleProviders.cn_additional;
+    const directGroup = {
+      ...selectBaseOption,
+      name: '直连',
+      proxies: [...directProxies.map((p) => p.name)],
+      icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/China.png',
+      hidden: true,
+    };
+    const globalGroup = {
+      ...selectBaseOption,
+      name: 'GLOBAL',
+      proxies: ['默认代理', ...customGroupNames, ...(chainGroup ? [chainGroup.name] : []), '直连'],
+      icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Global.png',
+    };
+    return {
+      globalGroup,
+      functionalGroups: [defaultGroup],
+      functionalRules: [],
+      finalRuleProviders,
+      chainGroup,
+      directGroup,
+    };
+  }
+
+  functionalGroups.push({
+    ...selectBaseOption,
+    name: '默认代理',
+    proxies: [...groupNamesOfSelect, ...baseGroupNames, ...customGroupNames],
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Proxy.png',
+  });
+
+  const orderedServiceConfigs = [
+    ...serviceConfigs.filter((svc) => svc.name === 'AdBlock'),
+    ...serviceConfigs.filter((svc) => svc.name !== 'AdBlock'),
+  ];
+  for (const svc of orderedServiceConfigs) {
+    if (!ruleOptionsEnable[svc.name]) continue;
+
+    functionalRules.push(...(svc.rules || []));
+    Object.assign(finalRuleProviders, svc.providers || {});
+  }
+
+  for (const svc of serviceConfigs) {
+    if (!ruleOptionsEnable[svc.name]) continue;
+
+    let groupProxies = [];
+    if (svc.includeAll) {
+      groupProxies = [...allProxiesNames];
+    } else if (svc.reject) {
+      groupProxies = ['REJECT', 'REJECT-DROP', 'PASS'];
+    } else {
+      groupProxies = !addAllNodesToServiceGroupsEnabled
+        ? ['默认代理', ...customGroupNames, ...baseGroupNames, ...groupNamesOfSelect, ...(svc.direct ? ['直连'] : [])]
+        : [
+            '默认代理',
+            ...customGroupNames,
+            ...baseGroupNames,
+            ...groupNamesOfSelect,
+            ...allProxiesNames,
+            ...(svc.direct ? ['直连'] : []),
+          ];
+    }
+
+    functionalGroups.push({
+      ...svc.baseOption,
+      name: svc.name,
+      icon: svc.icon,
+      proxies: groupProxies,
+      ...(svc.defaultSelected !== undefined && {
+        'default-selected': svc.defaultSelected,
+      }),
+    });
+  }
+
+  functionalGroups.push({
+    ...selectBaseOption,
+    name: '漏网之鱼',
+    proxies: ['默认代理', '直连', ...groupNamesOfSelect],
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Stack.png',
+  });
+
+  const directGroup = {
+    ...selectBaseOption,
+    name: '直连',
+    proxies: [...directProxies.map((p) => p.name)],
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/China.png',
+    hidden: hideManualSelectGroupEnabled,
+  };
+
+  const globalGroup = {
+    ...selectBaseOption,
+    name: 'GLOBAL',
+    proxies: [
+      ...functionalGroups.map((g) => g.name),
+      ...customGroupNames,
+      ...(chainGroup ? [chainGroup.name] : []),
+      directGroup.name,
+      ...generatedRegionGroups.map((g) => g.name),
+    ],
+    icon: 'https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Global.png',
+  };
+
+  return { globalGroup, functionalGroups, functionalRules, finalRuleProviders, chainGroup, directGroup };
+}
+
+// ---dns和hosts相关处理---
+
+// 常见的公共 DNS，用于过滤订阅中的公共 DNS
+const commonDnsList = [
+  // IPv4（国内）
+  '223.5.5.5',
+  '223.6.6.6',
+  '119.29.29.29',
+  '1.12.12.12',
+  '120.53.53.53',
+  '114.114.114.114',
+  '180.76.76.76',
+  '1.2.4.8',
+  '116.116.116.116',
+  '101.226.4.6',
+  '123.125.81.6',
+  '180.184.1.1',
+  '180.184.2.2',
+
+  // IPv6（国内）
+  '2400:3200::1',
+  '2400:3200:baba::1',
+  '2402:4e00::',
+  '2400:da00::6666',
+
+  // IPv4（国外）
+  '1.1.1.1',
+  '1.0.0.1',
+  '8.8.8.8',
+  '8.8.4.4',
+  '9.9.9.9',
+  '149.112.112.112',
+  '208.67.222.222',
+  '208.67.220.220',
+  '94.140.14.14',
+  '94.140.15.15',
+  '76.76.2.0',
+  '76.76.10.0',
+  '185.228.168.9',
+  '185.228.169.9',
+  '77.88.8.8',
+  '77.88.8.1',
+  '156.154.70.1',
+  '156.154.71.1',
+
+  // IPv6（国外）
+  '2606:4700:4700::1111',
+  '2606:4700:4700::1001',
+  '2001:4860:4860::8888',
+  '2001:4860:4860::8844',
+  '2620:fe::fe',
+  '2620:fe::9',
+  '2620:119:35::35',
+  '2620:119:53::53',
+  '2a10:50c0::bad1:ff',
+  '2a10:50c0::bad2:ff',
+  '2a10:50c0::ad1:ff',
+  '2a10:50c0::ad2:ff',
+  '2a0d:2a00:1::2',
+  '2a0d:2a00:2::2',
+  '2a02:6b8::feed:0ff',
+  '2a02:6b8:0:1::feed:0ff',
+  '2610:a1:1018::1',
+  '2610:a1:1019::1',
+
+  // 关键词（国内）
+  'alidns',
+  'doh.pub',
+  'dot.pub',
+  'dns.pub',
+  'dnspod',
+  'dns.baidu',
+
+  // 关键词（国外）
+  'dns.google',
+  'dns.cloudflare',
+  'dns.apple',
+  'cloudflare-dns',
+  'quad9',
+  'opendns',
+  'nextdns',
+  'adguard',
+  'one.one.one.one',
+];
+
+// 预编译公共 DNS 正则
+const commonDnsRegex = new RegExp(
+  commonDnsList.map((dns) => dns.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),
+  'i',
+);
+
+// 国内外 DNS 定义
+const chinaDNS = ['223.5.5.5#DIRECT', '119.29.29.29#DIRECT'];
+const foreignDNS = ['https://cloudflare-dns.com/dns-query#默认代理', 'https://dns.google/dns-query#默认代理'];
+const defaultDNS = ['114.114.114.114#DIRECT', 'tls://223.5.5.5#DIRECT', 'https://1.12.12.12/dns-query#DIRECT'];
+const proxyServerDNS = ['114.114.114.114#DIRECT', 'tls://223.5.5.5#DIRECT', 'https://doh.pub/dns-query#DIRECT'];
+
+/**
+ * hosts 匹配优先级：精确 > +. > . > *（同级按出现顺序）
+ */
+function hostSpecificity(pattern) {
+  if (pattern.startsWith('+.')) return 2;
+  if (pattern.startsWith('.')) return 1;
+  if (pattern.includes('*')) return 0;
+  return 3;
+}
+
+/**
+ * 判断域名规则（精确/通配）是否匹配节点域名集合，忽略大小写
+ */
+function matchDomainPattern(pattern, domains) {
+  pattern = pattern.toLowerCase();
+
+  // 精确匹配
+  if (!pattern.includes('*') && !pattern.startsWith('+.') && !pattern.startsWith('.')) {
+    return typeof domains === 'string'
+      ? domains.toLowerCase() === pattern
+      : [...domains].some((d) => d.toLowerCase() === pattern);
+  }
+
+  const domainList = typeof domains === 'string' ? [domains.toLowerCase()] : [...domains].map((d) => d.toLowerCase());
+
+  // +.example.com
+  if (pattern.startsWith('+.')) {
+    const suffix = pattern.slice(2);
+    return domainList.some((domain) => domain === suffix || domain.endsWith(`.${suffix}`));
+  }
+
+  // .example.com
+  if (pattern.startsWith('.')) {
+    const suffix = pattern.slice(1);
+    return domainList.some((domain) => domain !== suffix && domain.endsWith(`.${suffix}`));
+  }
+
+  // *.example.com、example.*.com 等
+  const patternParts = pattern.split('.');
+  return domainList.some((domain) => {
+    const domainParts = domain.split('.');
+    return (
+      patternParts.length === domainParts.length &&
+      patternParts.every((part, index) => part === '*' || part === domainParts[index])
+    );
+  });
+}
+
+/**
+ * 根据订阅 hosts 映射改写节点 server，改写后无需再复制 hosts 进新配置。
+ * 支持链式映射（如 a: b、b: c 时节点 a 改写为 c）；
+ * 回环映射（a: b、b: a）由内核校验拒绝，此处仅以已访问集合防御性终止
+ */
+function applyHostsToProxies(proxies, hosts) {
+  if (!hosts || typeof hosts !== 'object') return proxies;
+
+  const hostEntries = Object.entries(hosts)
+    .filter(
+      ([, value]) => (typeof value === 'string' && value.length > 0) || (Array.isArray(value) && value.length > 0),
+    )
+    .sort((a, b) => hostSpecificity(b[0]) - hostSpecificity(a[0]));
+
+  if (hostEntries.length === 0) return proxies;
+
+  const targetOf = (value) => {
+    if (Array.isArray(value)) value = value.find((v) => typeof v === 'string' && v.length > 0);
+    return typeof value === 'string' && value.length > 0 ? value : null;
+  };
+
+  const resolveCache = new Map();
+  const resolve = (server) => {
+    const cached = resolveCache.get(server);
+    if (cached !== undefined) return cached;
+
+    const seen = new Set();
+    let current = server.toLowerCase();
+    let result = server;
+    while (!seen.has(current)) {
+      seen.add(current);
+      const entry = hostEntries.find(([pattern]) => matchDomainPattern(pattern, current));
+      const target = entry && targetOf(entry[1]);
+      if (!target) break;
+      result = target;
+      current = target.toLowerCase();
+    }
+    resolveCache.set(server, result);
+    return result;
+  };
+
+  return proxies.map((proxy) => {
+    if (typeof proxy.server !== 'string') return proxy;
+    const server = resolve(proxy.server);
+    return server === proxy.server ? proxy : { ...proxy, server };
+  });
+}
+
+/**
+ * 剥离 DNS 地址的 # 策略组后缀；
+ * 参数包含 direct 或 直连 时，强制改为 #DIRECT
+ */
+function stripDnsSuffix(dns) {
+  const str = String(dns);
+  const hashIndex = str.indexOf('#');
+  if (hashIndex === -1) return str;
+
+  const prefix = str.slice(0, hashIndex).trim();
+
+  const suffix = str
+    .slice(hashIndex + 1)
+    .toLowerCase()
+    .trim();
+
+  if (suffix.includes('direct') || suffix.includes('直连')) return prefix + '#DIRECT';
+
+  return prefix;
+}
+
+/**
+ * 判断节点 server 是否为 IP 地址（IPv4 / IPv6），用于从节点域名集合中排除 IP 类型的 server
+ */
+function isIpAddress(server) {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(server) || server.includes(':');
+}
+
+/**
+ * 简化节点域名策略：将相同 DNS 的节点域名按后缀归类，至少三段的域名可合并为 +. 后缀形式
+ */
+function simplifyDomainPolicy(policy) {
+  const groups = new Map();
+
+  for (const [domain, dns] of Object.entries(policy)) {
+    const dnsKey = JSON.stringify(Array.isArray(dns) ? [...dns].sort() : dns);
+
+    if (domain.startsWith('+.') || domain.startsWith('.') || domain.includes('*')) {
+      groups.set(`keep:${domain}`, [{ domain, dns, dnsKey }]);
+      continue;
+    }
+
+    const parts = domain.split('.');
+
+    if (parts.length < 3) {
+      groups.set(`keep:${domain}`, [{ domain, dns, dnsKey }]);
+      continue;
+    }
+
+    const suffix = parts.slice(-2).join('.');
+
+    if (!groups.has(suffix)) {
+      groups.set(suffix, []);
+    }
+
+    groups.get(suffix).push({ domain, dns, dnsKey });
+  }
+
+  const result = {};
+
+  for (const [suffix, domains] of groups) {
+    const firstDnsKey = domains[0].dnsKey;
+    const sameDns = domains.every(({ dnsKey }) => dnsKey === firstDnsKey);
+
+    if (domains.length >= 2 && sameDns) {
+      result[`+.${suffix}`] = domains[0].dns;
+    } else {
+      for (const { domain, dns } of domains) {
+        result[domain] = dns;
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * 构建 DNS 与 hosts：保留私有 DNS、节点域名 policy/fake-ip-filter，并按 hosts 改写节点 server
+ * hosts改写条件（满足任意一个条件即可）：
+ * 1. proxy-server-nameserver 有且仅有一个 DNS 并且该 DNS 包含非空的 listen 值
+ * 2. proxy-server-nameserver 有且仅有一个 DNS 并且该 DNS 包含 127.0.0.1 并且 listen 包含 0.0.0.0
+ */
+function buildDnsAndHostsConfig(config, filteredProxies) {
+  const minimalModeEnabled = ruleOptionsEnable.极简模式;
+
+  const originalDnsConfig = config.dns || {};
+
+  const proxyServerNameservers = originalDnsConfig['proxy-server-nameserver'] || [];
+  const listenValue = originalDnsConfig['listen'];
+
+  const shouldRewriteByHosts =
+    proxyServerNameservers.length === 1 &&
+    typeof listenValue === 'string' &&
+    listenValue.length > 0 &&
+    (proxyServerNameservers.some((dns) => String(dns).toLowerCase().includes(listenValue.toLowerCase())) ||
+      (listenValue.includes('0.0.0.0') &&
+        proxyServerNameservers.some((dns) => String(dns).toLowerCase().includes('127.0.0.1'))));
+
+  const mappedProxies = shouldRewriteByHosts ? applyHostsToProxies(filteredProxies, config.hosts) : filteredProxies;
+
+  const proxyDomains = new Set(
+    mappedProxies
+      .filter((proxy) => typeof proxy.server === 'string')
+      .map((proxy) => proxy.server.toLowerCase())
+      .filter((server) => !isIpAddress(server)),
+  );
+
+  const privateProxyServerNameservers = shouldRewriteByHosts ? [] : proxyServerNameservers;
+
+  const isCommonDns = (dns) => {
+    const value = String(dns).trim().toLowerCase();
+    if (value === 'system' || value === 'system://') return true;
+
+    return commonDnsRegex.test(value);
+  };
+
+  const privateDNS = [
+    ...new Set(
+      [...(originalDnsConfig['nameserver'] || []), ...privateProxyServerNameservers]
+        .map(stripDnsSuffix)
+        .filter((dns) => dns.length > 0 && !isCommonDns(dns)),
+    ),
+  ];
+
+  const matchedProxyPolicy = {};
+  for (const [domain, dns] of Object.entries({
+    ...originalDnsConfig['nameserver-policy'],
+    ...originalDnsConfig['proxy-server-nameserver-policy'],
+  })) {
+    if (!matchDomainPattern(domain, proxyDomains)) continue;
+
+    const stripedDns = Array.isArray(dns) ? dns.map(stripDnsSuffix).filter((d) => d.length > 0) : stripDnsSuffix(dns);
+    if (Array.isArray(stripedDns) && stripedDns.length === 0) continue;
+
+    matchedProxyPolicy[domain] = stripedDns;
+  }
+
+  if (privateDNS.length > 0 && Object.keys(matchedProxyPolicy).length === 0) {
+    for (const domain of proxyDomains) {
+      matchedProxyPolicy[domain] = privateDNS;
+    }
+  }
+
+  const matchedPolicyDomains = Object.keys(matchedProxyPolicy);
+  const proxyServerPolicy =
+    proxyDomains.size === matchedPolicyDomains.length &&
+    matchedPolicyDomains.every((domain) => proxyDomains.has(domain.toLowerCase()))
+      ? simplifyDomainPolicy(matchedProxyPolicy)
+      : matchedProxyPolicy;
+
+  const originalFakeIpFilter = originalDnsConfig['fake-ip-filter'] || [];
+  const proxyFakeIpFilter = originalFakeIpFilter.filter((pattern) => {
+    const p = String(pattern);
+    return matchDomainPattern(p, proxyDomains);
+  });
+
+  const dns = {
+    enable: true,
+    ipv6: true,
+    'use-hosts': true,
+    'cache-algorithm': 'arc',
+    'use-system-hosts': true,
+    'enhanced-mode': 'fake-ip',
+    'fake-ip-range': '198.18.0.1/15',
+    'fake-ip-range6': '2001:2::1/48',
+    'fake-ip-filter': [
+      'rule-set:private',
+      'rule-set:fakeip_filter',
+      'rule-set:geolocation-cn',
+      ...(minimalModeEnabled ? [] : ruleOptionsEnable['FCM'] ? ['rule-set:googlefcm'] : []),
+      ...proxyFakeIpFilter,
+    ],
+    'default-nameserver': defaultDNS,
+    'proxy-server-nameserver': proxyServerDNS,
+    ...(Object.keys(proxyServerPolicy).length > 0 && {
+      'proxy-server-nameserver-policy': proxyServerPolicy,
+    }),
+    nameserver: foreignDNS,
+    'nameserver-policy': {
+      'rule-set:cn': chinaDNS,
+    },
+    'direct-nameserver': chinaDNS,
+  };
+
+  const hosts = {
+    'doh.pub': ['1.12.12.12', '120.53.53.53'],
+    'cloudflare-dns.com': ['1.1.1.1', '1.0.0.1'],
+    'dns.google': ['8.8.8.8', '8.8.4.4'],
+
+    // 解决谷歌商店无法下载的问题
+    'services.googleapis.cn': 'services.googleapis.com',
+
+    // 屏蔽哔哩哔哩PCDN，解决访问视频/直播卡顿问题
+    '+.mcdn.bilivideo.com': ['0.0.0.0'],
+    '+.mcdn.bilivideo.cn': ['0.0.0.0'],
+    '+.edge.mountaintoys.cn': ['0.0.0.0'],
+    '+.h2.smtcdns.net': ['0.0.0.0'],
+  };
+
+  return { dns, hosts, proxies: mappedProxies };
+}
+
+// --- 主入口 ---
+
+/**
+ * 主入口：覆写机场订阅配置，生成完整 mihomo 配置
+ */
+function main(config) {
+  if (config['proxy-providers'] && Object.keys(config['proxy-providers']).length > 0) {
+    throw new Error('配置文件中包含 proxy-providers，请使用机场提供的配置文件进行覆写');
+  }
+
+  const newConfig = {};
+
+  const filteredProxies = filterAndNormalizeProxies(config);
+
+  const { customProxies, customProxyNames, customGroup } = buildCustomizeGroups(filteredProxies);
+
+  const generatedRegionGroups = ruleOptionsEnable.极简模式 ? [] : buildRegionGroups(filteredProxies, customProxies);
+
+  const { globalGroup, functionalGroups, functionalRules, finalRuleProviders, chainGroup, directGroup } =
+    buildFunctionalGroups(filteredProxies, generatedRegionGroups, { customProxyNames, customGroup });
+
+  const { dns, hosts, proxies: mappedProxies } = buildDnsAndHostsConfig(config, filteredProxies);
+
+  newConfig['dns'] = dns;
+  newConfig['hosts'] = hosts;
+  newConfig['mixed-port'] = 7890;
+  newConfig['allow-lan'] = true;
+  newConfig['ipv6'] = true;
+  newConfig['mode'] = 'rule';
+  newConfig['log-level'] = 'info';
+  newConfig['bind-address'] = '*';
+  newConfig['unified-delay'] = true;
+  newConfig['tcp-concurrent'] = true;
+  newConfig['keep-alive-interval'] = 60;
+  newConfig['find-process-mode'] = 'strict';
+
+  newConfig['external-controller'] = '127.0.0.1:9090';
+  newConfig['external-ui'] = 'ui';
+  newConfig['external-ui-url'] = 'https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip';
+
+  newConfig['profile'] = {
+    'store-selected': true,
+    'store-fake-ip': true,
+  };
+
+  newConfig['ntp'] = {
+    enable: true,
+    'write-to-system': false,
+    server: 'ntp.aliyun.com',
+    port: 123,
+    interval: 60,
+  };
+
+  newConfig['tun'] = {
+    enable: true,
+    stack: 'gvisor',
+    'auto-route': true,
+    'strict-route': true,
+    'auto-redirect': true,
+    'auto-detect-interface': true,
+    'dns-hijack': ['any:53', 'tcp://any:53'],
+  };
+
+  newConfig['proxies'] = [...customProxies, ...mappedProxies, ...directProxies];
+  newConfig['proxy-groups'] = [
+    globalGroup,
+    ...functionalGroups,
+    ...(customGroup ? [customGroup] : []),
+    ...(chainGroup ? [chainGroup] : []),
+    directGroup,
+    ...generatedRegionGroups,
+  ];
+  newConfig['rule-providers'] = finalRuleProviders;
+
+  newConfig['rules'] = [
+    ...prefixRules,
+    ...(ruleOptionsEnable.屏蔽国外QUIC ? blockForeignQuic : []),
+    ...functionalRules,
+
+    // 兜底规则
+    'RULE-SET,geolocation-!cn,默认代理',
+    'RULE-SET,cn_ip,直连',
+    'RULE-SET,private_ip,直连',
+    `MATCH,${ruleOptionsEnable.极简模式 ? '默认代理' : '漏网之鱼'}`,
+  ];
+
+  return newConfig;
+}
